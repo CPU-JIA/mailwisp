@@ -1,0 +1,30 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Runtime data and backups
+data/
+backups/
+*.dump
+*.sql.gz
+*.eml
+
+# Go artifacts
+bin/
+coverage.out
+*.test
+*.prof
+
+# Frontend artifacts
+web/node_modules/
+web/dist/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
