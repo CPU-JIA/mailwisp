@@ -204,11 +204,12 @@ docs/decisions/      Architecture Decision Record
 
 - Canonical Opaque Token必须遵循ADR 0005的`wisp_<type>_v1_<kid>_<secret>`语法；兼容Adapter不得反向污染Canonical认证模型。
 - Token使用 `crypto/rand` 生成，熵不得低于256 bit。
-- Token明文只展示一次；数据库只保存Domain-separated Digest、非秘密Kid、Type、Scope与生命周期状态。
+- Bearer Token明文只展示一次；数据库只保存Domain-separated Digest、非秘密Kid、Type、Scope与生命周期状态。
 - 适用时使用Constant-time Comparison。
 - Scope检查默认拒绝。
 - Token Rotation必须在一个原子操作中使旧Token失效。
 - V1不得签发永久PAT或不可撤销JWT Bearer Token。
+- Webhook Signing Secret等服务端必须使用的Key Material不得套用不可逆Bearer Digest存储，必须通过独立ADR确定加密存储或主密钥派生边界。
 - 管理Secret不得出现在日志中。
 - Web Console优先使用 Secure、HttpOnly、SameSite Cookie，降低XSS窃取风险。
 - 登录、注册、域名提交和高成本查询必须限流。
