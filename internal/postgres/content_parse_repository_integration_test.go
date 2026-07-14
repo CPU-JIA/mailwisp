@@ -266,7 +266,7 @@ func TestContentParseRepositoryClaimsConcurrentlyWithoutDuplicates(t *testing.T)
 	}
 	const contentCount = 8
 	for index := range contentCount {
-		key := contentKey(string(rune('a' + index)))
+		key := contentKey(string("01234567"[index]))
 		if _, err := pool.Exec(context.Background(), `
 			INSERT INTO mail_contents (content_key, size_bytes) VALUES ($1, $2)
 		`, key, index+1); err != nil {
