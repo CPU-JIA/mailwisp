@@ -90,4 +90,4 @@ Worker在同一次流式解析读取中计算实际Size与SHA-256。只有读取
 - Worker从Content Store读取真实Raw MIME，完成Digest校验、MIME解析与PostgreSQL持久化；
 - Unit、Race、固定PostgreSQL 18.4 Integration、全仓安全扫描与GitHub Actions完整门禁通过。
 
-本地Windows当前已完成Unit、Race、Vet与Integration Test编译；Docker Engine未运行，因此真实Migration和PostgreSQL Integration必须由本分支GitHub Actions固定Linux门禁给出最终证据。
+首次修复后完整远端门禁已由GitHub Actions Run [29366898352](https://github.com/CPU-JIA/mailwisp/actions/runs/29366898352)验证通过，覆盖固定PostgreSQL 18.4真实Migration、v1→v2带数据升级、并发领取、Lease过期与Fencing、Worker到Content Store和Parse Result的端到端闭环、普通与Race Integration，以及全仓Fuzz和安全扫描。该Run验证提交`a2d708d`；证据同步提交本身仍必须重新通过PR门禁。

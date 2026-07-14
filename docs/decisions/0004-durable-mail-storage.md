@@ -79,4 +79,4 @@ Content Hash用于物理去重，但每次SMTP投递仍创建独立Message Recor
 
 - 真实Linux生产文件系统或VM在断电/硬重启下的目录与文件持久性演练；进程强杀不能替代掉电证明。
 - Linux生产文件系统上的容量、目录数量与尾延迟Benchmark。
-- Parser Worker领取、重试与结果持久化已进入当前开发分支，仍需完整远端Integration与Race门禁；恶意邮件Corpus峰值RSS验证尚未完成。
+- Content级Parser Worker领取、重试、Lease Fencing、流式Digest校验与结果持久化已经通过固定PostgreSQL 18.4远端Integration和Race门禁；恶意邮件Corpus峰值RSS验证尚未完成。
