@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"mailwisp/internal/contentstore"
@@ -296,7 +297,7 @@ func waitForQueueID(t *testing.T, container testcontainers.Container, queueID st
 
 func execOutput(t *testing.T, ctx context.Context, container testcontainers.Container, command ...string) []byte {
 	t.Helper()
-	exitCode, reader, err := container.Exec(ctx, command)
+	exitCode, reader, err := container.Exec(ctx, command, tcexec.Multiplexed())
 	if err != nil {
 		t.Fatalf("execute %q in Postfix container: %v", command, err)
 	}
@@ -311,7 +312,7 @@ func execOutput(t *testing.T, ctx context.Context, container testcontainers.Cont
 }
 
 func execOutputBestEffort(ctx context.Context, container testcontainers.Container, command ...string) []byte {
-	exitCode, reader, err := container.Exec(ctx, command)
+	exitCode, reader, err := container.Exec(ctx, command, tcexec.Multiplexed())
 	if err != nil {
 		return []byte(err.Error())
 	}
