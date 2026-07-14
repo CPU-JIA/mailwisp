@@ -63,10 +63,14 @@ Content Hash用于物理去重，但每次SMTP投递仍创建独立Message Recor
 - 普通与Race Integration均通过。
 - 固定Digest的Linux/amd64 Go 1.26.5环境中，全仓Test与Race通过，目录权限分支已真实执行。
 - Gosec v2.27.1零Issue，未使用 `#nosec`；govulncheck与Gitleaks通过。
+- 有界Content Reconciliation扫描已实现：数据库引用使用Keyset Pagination，文件对象按固定批次比对，不把全量索引加载到内存。
+- `serve`持有独立PostgreSQL Session的共享维护锁；`reconcile`必须取得独占锁，避免“文件已落盘、数据库尚未提交”的重复投递窗口被误删。
+- Orphan支持显式`--repair-orphans`修复；Missing与Corrupt只报告并以非零状态退出，不自动删除业务记录。
+- 普通与Race Integration已覆盖Content Catalog分页、维护锁互斥和Orphan修复。
 
 仍未完成，因此ADR保持“提议中”：
 
 - Linux进程在Write、Fsync、Link和DB Commit各阶段被强制终止后的恢复测试。
 - 真实Postfix队列重投与应用重启验证。
-- 数据库与Content Store一致性备份、恢复和Orphan/Missing扫描。
+- 数据库与Content Store一致性备份和恢复演练。
 - Linux生产文件系统上的容量、目录数量与尾延迟Benchmark。
