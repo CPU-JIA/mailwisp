@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"mailwisp/internal/backup"
 )
 
@@ -103,6 +105,95 @@ func TestEnvironmentWithReplacesOneVariable(t *testing.T) {
 	}
 }
 
+func TestEnvironmentWithPostgresConnectionRemovesAmbientOverrides(t *testing.T) {
+	t.Parallel()
+
+	environment := []string{
+		"PATH=/bin",
+		"PGDATABASE=ambient",
+		"PGSERVICE=unsafe",
+		"PGSSLROOTCERT=/ambient/root.crt",
+	}
+	variables := []environmentVariable{
+		{name: "PGHOST", value: "127.0.0.1"},
+		{name: "PGDATABASE", value: "mailwisp"},
+	}
+	got := environmentWithPostgresConnection(environment, variables)
+	want := []string{"PATH=/bin", "PGHOST=127.0.0.1", "PGDATABASE=mailwisp"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("environmentWithPostgresConnection() = %#v, want %#v", got, want)
+	}
+}
+
+func TestPostgresCommandEnvironmentUsesParsedConnectionFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		dsn  string
+	}{
+		{
+			name: "url",
+			dsn:  "postgres://mailwisp:secret@127.0.0.1:55432/mailwisp_test?sslmode=disable&connect_timeout=7",
+		},
+		{
+			name: "keyword value",
+			dsn:  "host=127.0.0.1 port=55432 dbname=mailwisp_test user=mailwisp password=secret sslmode=disable connect_timeout=7",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			config, err := pgx.ParseConfig(test.dsn)
+			if err != nil {
+				t.Fatalf("pgx.ParseConfig() error = %v", err)
+			}
+			variables, err := postgresCommandEnvironment(config)
+			if err != nil {
+				t.Fatalf("postgresCommandEnvironment() error = %v", err)
+			}
+			got := environmentVariableMap(variables)
+			want := map[string]string{
+				"PGHOST":            "127.0.0.1",
+				"PGPORT":            "55432",
+				"PGDATABASE":        "mailwisp_test",
+				"PGUSER":            "mailwisp",
+				"PGPASSWORD":        "secret",
+				"PGSSLMODE":         "disable",
+				"PGCONNECT_TIMEOUT": "7",
+			}
+			for name, value := range want {
+				if got[name] != value {
+					t.Errorf("environment %s = %q, want %q", name, got[name], value)
+				}
+			}
+			for _, variable := range variables {
+				if strings.Contains(variable.value, "postgres://") {
+					t.Fatalf("environment %s contains raw DSN", variable.name)
+				}
+			}
+		})
+	}
+}
+
+func TestPostgresCommandEnvironmentRejectsUnsupportedRouting(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{
+		"postgres://mailwisp:secret@first:5432,second:5432/mailwisp?sslmode=disable",
+		"postgres://mailwisp:secret@127.0.0.1:5432/mailwisp?sslmode=disable&target_session_attrs=read-write",
+	}
+	for _, dsn := range tests {
+		config, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			t.Fatalf("pgx.ParseConfig(%q) error = %v", dsn, err)
+		}
+		if _, err := postgresCommandEnvironment(config); err == nil {
+			t.Fatalf("postgresCommandEnvironment(%q) error = nil", dsn)
+		}
+	}
+}
+
 func TestBoundedBuffer(t *testing.T) {
 	t.Parallel()
 
@@ -118,4 +209,12 @@ func TestBoundedBuffer(t *testing.T) {
 	if got := buffer.String(); got != "abcde" {
 		t.Fatalf("boundedBuffer.String() = %q, want %q", got, "abcde")
 	}
+}
+
+func environmentVariableMap(variables []environmentVariable) map[string]string {
+	result := make(map[string]string, len(variables))
+	for _, variable := range variables {
+		result[variable.name] = variable.value
+	}
+	return result
 }

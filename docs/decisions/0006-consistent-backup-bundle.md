@@ -69,7 +69,8 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 ### PostgreSQL工具
 
 - 不自行实现表级JSON/CSV备份协议，避免每次Schema演进复制`pg_dump`已经解决的依赖、类型、Sequence和DDL问题。
-- Adapter只调用官方`pg_dump`与`pg_restore`，密码通过子进程环境传递，不进入Command Line或日志。
+- Adapter只调用官方`pg_dump`与`pg_restore`，将已解析的Host、Port、Database、User、Password与TLS策略分别写入受控libpq环境；原始DSN与密码不进入Command Line或日志。
+- V1 Backup Tool明确只支持Reference Profile的单Host DSN；Multi-host与`target_session_attrs`在可证明无语义损失前拒绝执行。
 - 客户端Major Version必须与PostgreSQL Server Major一致；Reference Profile固定验证18.4工具链。
 - Go Bundle层不依赖Docker。Integration Test使用固定Digest的PostgreSQL 18.4容器与精确18.4客户端；Reference部署要求宿主机提供同Major官方客户端。
 
@@ -104,7 +105,7 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 - Bundle篡改、未知字段、额外文件、失败不发布与空目标恢复单元测试。
 - Restore前完整验包，Content先安装，数据库使用Single Transaction恢复，恢复后完整Reconciliation。
 - `mailwisp backup <directory>`与`mailwisp restore <bundle-directory>`正式命令及独占维护锁。
-- `pg_dump`与`pg_restore`固定命令入口；DSN只通过`PGDATABASE`子进程环境传递，错误输出有界并执行DSN Redaction。
+- `pg_dump`与`pg_restore`固定命令入口；连接字段只通过清理后的libpq子进程环境传递，错误输出有界并执行Secret Redaction。
 - PostgreSQL Server、`pg_dump`与`pg_restore`Major一致性验证；Gosec零Issue且未使用`#nosec`。
 - 已实现固定PostgreSQL 18.4真实Bundle Round-trip Integration Test，并接入GitHub Actions所需的精确18.4客户端安装与版本门禁。
 

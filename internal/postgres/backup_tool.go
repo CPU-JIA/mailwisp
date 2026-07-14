@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mailwisp/internal/backup"
@@ -25,12 +29,27 @@ const (
 
 var postgresVersionPattern = regexp.MustCompile(`\b([0-9]+(?:\.[0-9]+)+)\b`)
 
+var postgresConnectionEnvironmentNames = map[string]struct{}{
+	"PGAPPNAME": {}, "PGCHANNELBINDING": {}, "PGCLIENTENCODING": {},
+	"PGCONNECT_TIMEOUT": {}, "PGDATABASE": {}, "PGGSSLIB": {}, "PGGSSENCMODE": {},
+	"PGHOST": {}, "PGHOSTADDR": {}, "PGKRBSRVNAME": {},
+	"PGLOADBALANCEHOSTS": {}, "PGMAXPROTOCOLVERSION": {}, "PGMINPROTOCOLVERSION": {},
+	"PGOPTIONS": {}, "PGPASSFILE": {}, "PGPASSWORD": {},
+	"PGPORT": {}, "PGREALM": {}, "PGREQUIREAUTH": {}, "PGREQUIREPEER": {}, "PGREQUIRESSL": {},
+	"PGSERVICE": {}, "PGSERVICEFILE": {}, "PGSSLCERT": {},
+	"PGSSLCOMPRESSION": {}, "PGSSLCRL": {}, "PGSSLCRLDIR": {}, "PGSSLKEY": {},
+	"PGSSLMODE": {}, "PGSSLNEGOTIATION": {}, "PGSSLPASSWORD": {}, "PGSSLROOTCERT": {},
+	"PGSSLSNI": {}, "PGSYSCONFDIR": {}, "PGTARGETSESSIONATTRS": {},
+	"PGTZ": {}, "PGUSER": {},
+}
+
 // BackupTool invokes the official PostgreSQL logical backup tools while using
 // the repository as the restored content catalog.
 type BackupTool struct {
-	dsn        string
-	pool       *pgxpool.Pool
-	repository *DeliveryRepository
+	pool                  *pgxpool.Pool
+	repository            *DeliveryRepository
+	connectionEnvironment []environmentVariable
+	redactions            []string
 }
 
 // NewBackupTool constructs the official PostgreSQL backup adapter.
@@ -42,7 +61,24 @@ func NewBackupTool(dsn string, pool *pgxpool.Pool) (*BackupTool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BackupTool{dsn: dsn, pool: pool, repository: repository}, nil
+	connectionConfig, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres backup DSN: %w", err)
+	}
+	connectionEnvironment, err := postgresCommandEnvironment(connectionConfig)
+	if err != nil {
+		return nil, err
+	}
+	redactions := []string{dsn}
+	if connectionConfig.Password != "" {
+		redactions = append(redactions, connectionConfig.Password)
+	}
+	return &BackupTool{
+		pool:                  pool,
+		repository:            repository,
+		connectionEnvironment: connectionEnvironment,
+		redactions:            redactions,
+	}, nil
 }
 
 // Dump writes one PostgreSQL custom-format dump.
@@ -186,13 +222,17 @@ func (t *BackupTool) run(command *exec.Cmd, input io.Reader, output io.Writer) e
 	if command == nil {
 		return errors.New("postgres command is required")
 	}
-	command.Env = environmentWith(os.Environ(), "PGDATABASE", t.dsn)
+	command.Env = environmentWithPostgresConnection(os.Environ(), t.connectionEnvironment)
 	command.Stdin = input
 	command.Stdout = output
 	stderr := &boundedBuffer{limit: maxToolErrorBytes}
 	command.Stderr = stderr
 	if err := command.Run(); err != nil {
-		detail := strings.TrimSpace(strings.ReplaceAll(stderr.String(), t.dsn, "<redacted>"))
+		detail := stderr.String()
+		for _, secret := range t.redactions {
+			detail = strings.ReplaceAll(detail, secret, "<redacted>")
+		}
+		detail = strings.TrimSpace(detail)
 		if detail == "" {
 			return err
 		}
@@ -259,6 +299,115 @@ func postgreSQLMajor(version string) (string, error) {
 	return parts[0], nil
 }
 
+type environmentVariable struct {
+	name  string
+	value string
+}
+
+func postgresCommandEnvironment(config *pgx.ConnConfig) ([]environmentVariable, error) {
+	if config == nil {
+		return nil, errors.New("postgres connection config is required")
+	}
+	endpoints := []string{net.JoinHostPort(config.Host, strconv.Itoa(int(config.Port)))}
+	for _, fallback := range config.Fallbacks {
+		endpoint := net.JoinHostPort(fallback.Host, strconv.Itoa(int(fallback.Port)))
+		found := false
+		for _, existing := range endpoints {
+			if existing == endpoint {
+				found = true
+				break
+			}
+		}
+		if !found {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	if len(endpoints) != 1 {
+		return nil, errors.New("postgres backup tool requires a single-host DSN")
+	}
+	if config.ValidateConnect != nil {
+		return nil, errors.New("postgres backup tool does not support target_session_attrs")
+	}
+	sslMode, sslRootCert, sslSNI, err := postgresCommandTLS(config)
+	if err != nil {
+		return nil, err
+	}
+	variables := []environmentVariable{
+		{name: "PGHOST", value: config.Host},
+		{name: "PGPORT", value: strconv.Itoa(int(config.Port))},
+		{name: "PGDATABASE", value: config.Database},
+		{name: "PGUSER", value: config.User},
+		{name: "PGPASSWORD", value: config.Password},
+		{name: "PGSSLMODE", value: sslMode},
+	}
+	if config.ConnectTimeout > 0 {
+		seconds := (config.ConnectTimeout + time.Second - 1) / time.Second
+		variables = append(variables, environmentVariable{name: "PGCONNECT_TIMEOUT", value: strconv.FormatInt(int64(seconds), 10)})
+	}
+	if sslRootCert != "" {
+		variables = append(variables, environmentVariable{name: "PGSSLROOTCERT", value: sslRootCert})
+	}
+	if sslSNI != "" {
+		variables = append(variables, environmentVariable{name: "PGSSLSNI", value: sslSNI})
+	}
+	if config.SSLNegotiation != "" {
+		variables = append(variables, environmentVariable{name: "PGSSLNEGOTIATION", value: config.SSLNegotiation})
+	}
+	if config.ChannelBinding != "" {
+		variables = append(variables, environmentVariable{name: "PGCHANNELBINDING", value: config.ChannelBinding})
+	}
+	if config.RequireAuth != "" {
+		variables = append(variables, environmentVariable{name: "PGREQUIREAUTH", value: config.RequireAuth})
+	}
+	if config.MinProtocolVersion != "" {
+		variables = append(variables, environmentVariable{name: "PGMINPROTOCOLVERSION", value: config.MinProtocolVersion})
+	}
+	if config.MaxProtocolVersion != "" {
+		variables = append(variables, environmentVariable{name: "PGMAXPROTOCOLVERSION", value: config.MaxProtocolVersion})
+	}
+	return variables, nil
+}
+
+func postgresCommandTLS(config *pgx.ConnConfig) (mode, rootCert, sni string, err error) {
+	if config.TLSConfig != nil {
+		if config.TLSConfig.RootCAs != nil || len(config.TLSConfig.Certificates) != 0 {
+			return "", "", "", errors.New("postgres backup tool does not yet support custom TLS certificate files")
+		}
+	}
+	hasTLSFallback := false
+	hasPlainFallback := false
+	for _, fallback := range config.Fallbacks {
+		if fallback.Host != config.Host || fallback.Port != config.Port {
+			continue
+		}
+		if fallback.TLSConfig == nil {
+			hasPlainFallback = true
+		} else {
+			hasTLSFallback = true
+		}
+	}
+	switch {
+	case config.TLSConfig == nil && hasTLSFallback:
+		mode = "allow"
+	case config.TLSConfig == nil:
+		mode = "disable"
+	case hasPlainFallback:
+		mode = "prefer"
+	case !config.TLSConfig.InsecureSkipVerify:
+		mode = "verify-full"
+		rootCert = "system"
+	case config.TLSConfig.VerifyPeerCertificate != nil:
+		mode = "verify-ca"
+		rootCert = "system"
+	default:
+		mode = "require"
+	}
+	if config.TLSConfig != nil && config.TLSConfig.ServerName == "" && net.ParseIP(config.Host) == nil {
+		sni = "0"
+	}
+	return mode, rootCert, sni, nil
+}
+
 func environmentWith(environment []string, name, value string) []string {
 	result := make([]string, 0, len(environment)+1)
 	for _, entry := range environment {
@@ -269,6 +418,23 @@ func environmentWith(environment []string, name, value string) []string {
 		result = append(result, entry)
 	}
 	return append(result, name+"="+value)
+}
+
+func environmentWithPostgresConnection(environment []string, variables []environmentVariable) []string {
+	result := make([]string, 0, len(environment)+len(variables))
+	for _, entry := range environment {
+		entryName, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, reserved := postgresConnectionEnvironmentNames[strings.ToUpper(entryName)]; reserved {
+				continue
+			}
+		}
+		result = append(result, entry)
+	}
+	for _, variable := range variables {
+		result = append(result, variable.name+"="+variable.value)
+	}
+	return result
 }
 
 type boundedBuffer struct {
