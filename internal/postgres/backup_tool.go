@@ -113,6 +113,9 @@ func (t *BackupTool) Restore(ctx context.Context, source io.Reader) (backup.Data
 	if err := t.run(command, source, io.Discard); err != nil {
 		return backup.DatabaseMetadata{}, fmt.Errorf("run pg_restore: %w", err)
 	}
+	if err := t.repository.Ready(ctx); err != nil {
+		return backup.DatabaseMetadata{}, fmt.Errorf("verify restored postgres schema: %w", err)
+	}
 	migrationVersion, err := t.migrationVersion(ctx)
 	if err != nil {
 		return backup.DatabaseMetadata{}, err
