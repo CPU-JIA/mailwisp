@@ -30,7 +30,7 @@ import (
 
 const (
 	postfixImage       = "mailwisp/postfix-integration:3.11.5-r0"
-	postfixPackage     = "postfix-3.11.5-r0"
+	postfixPackageSpec = "postfix=3.11.5-r0"
 	postfixVersion     = "3.11.5"
 	postfixSMTPPort    = "25/tcp"
 	testRecipient      = "inbox@example.test"
@@ -266,9 +266,7 @@ func assertPostfixVersion(t *testing.T, container testcontainers.Container) {
 	if got := strings.TrimSpace(string(execOutput(t, ctx, container, "postconf", "-h", "mail_version"))); got != postfixVersion {
 		t.Fatalf("Postfix version = %q, want %q", got, postfixVersion)
 	}
-	if got := strings.TrimSpace(string(execOutput(t, ctx, container, "apk", "info", "-v", "postfix"))); got != postfixPackage {
-		t.Fatalf("Postfix package = %q, want %q", got, postfixPackage)
-	}
+	execOutput(t, ctx, container, "apk", "info", "--exists", postfixPackageSpec)
 }
 
 func flushQueue(t *testing.T, container testcontainers.Container) {
