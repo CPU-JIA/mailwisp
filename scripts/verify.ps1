@@ -16,6 +16,32 @@ function Invoke-Native {
     }
 }
 
+function Assert-GoToolVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CommandName,
+
+        [Parameter(Mandatory)]
+        [string]$ModulePath,
+
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    if (-not $command) {
+        throw "$CommandName未安装，验证不得跳过。"
+    }
+    $metadata = & go version -m $command.Source | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法读取$CommandName构建元数据。"
+    }
+    $expected = "mod`t$ModulePath`t$Version"
+    if (-not $metadata.Contains($expected)) {
+        throw "$CommandName版本不符合要求，必须为$ModulePath@$Version。"
+    }
+}
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $env:GOTOOLCHAIN = 'go1.26.5'
 
@@ -27,11 +53,32 @@ try {
     Invoke-Native -Name 'go test -race' -Command { go test -race ./... }
     Invoke-Native -Name 'go vet' -Command { go vet ./... }
 
-    if (Get-Command govulncheck -ErrorAction SilentlyContinue) {
-        Invoke-Native -Name 'govulncheck' -Command { govulncheck ./... }
+    if (Get-Command docker -ErrorAction SilentlyContinue) {
+        Invoke-Native -Name 'docker info' -Command { docker info --format '{{.ServerVersion}}' }
+        $linuxGoImage = 'registry-1.docker.io/library/golang@sha256:3f6236bd765f898a2a3c2946112b04097814c4529d44534674700cd07b9c6b4c'
+        Invoke-Native -Name 'linux go test and race test' -Command {
+            docker run --rm --platform linux/amd64 `
+                --mount "type=bind,source=$repositoryRoot,target=/src,readonly" `
+                -w /src `
+                -e GOPROXY=https://proxy.golang.org,direct `
+                $linuxGoImage `
+                sh -c 'go test ./... && go test -race ./...'
+        }
+        Invoke-Native -Name 'postgres integration tests' -Command { go test -tags=integration ./internal/postgres -count=1 }
+        Invoke-Native -Name 'postgres integration race tests' -Command { go test -race -tags=integration ./internal/postgres -count=1 }
     } else {
-        throw 'govulncheck未安装，安全验证不得跳过。'
+        throw 'Docker未安装，PostgreSQL Integration验证不得跳过。'
     }
+
+    Assert-GoToolVersion -CommandName 'govulncheck' -ModulePath 'golang.org/x/vuln' -Version 'v1.6.0'
+    Invoke-Native -Name 'govulncheck including integration tests' -Command { govulncheck -test -tags=integration ./... }
+
+    Assert-GoToolVersion -CommandName 'gosec' -ModulePath 'github.com/securego/gosec/v2' -Version 'v2.27.1'
+    Invoke-Native -Name 'gosec' -Command { gosec -tags=integration ./... }
+
+    Assert-GoToolVersion -CommandName 'gitleaks' -ModulePath 'github.com/zricethezav/gitleaks/v8' -Version 'v8.30.1'
+    Invoke-Native -Name 'gitleaks working tree scan' -Command { gitleaks dir . --no-banner --redact }
+    Invoke-Native -Name 'gitleaks git history scan' -Command { gitleaks git --no-banner --redact }
 
     $frontendRoot = Join-Path $repositoryRoot 'spikes/frontend'
     if (Test-Path -LiteralPath (Join-Path $frontendRoot 'package-lock.json')) {
