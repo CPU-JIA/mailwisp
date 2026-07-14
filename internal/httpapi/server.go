@@ -19,14 +19,16 @@ type ReadinessChecker interface {
 
 // Server owns the public HTTP server and its lifecycle.
 type Server struct {
-	httpServer *http.Server
-	logger     *slog.Logger
-	ready      atomic.Bool
+	httpServer       *http.Server
+	logger           *slog.Logger
+	ready            atomic.Bool
+	readiness        ReadinessChecker
+	readinessTimeout time.Duration
 }
 
 // NewServer creates a production-configured public HTTP server.
 func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
-	server := &Server{logger: logger}
+	server := &Server{logger: logger, readinessTimeout: cfg.ReadinessTimeout}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", server.handleLive)
 	mux.HandleFunc("GET /readyz", server.handleReady)
@@ -42,6 +44,12 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 		MaxHeaderBytes:    cfg.MaxHeaderBytes,
 	}
 	return server
+}
+
+// SetReadinessChecker configures the required dependency check.
+// It must be called before the HTTP server starts.
+func (s *Server) SetReadinessChecker(checker ReadinessChecker) {
+	s.readiness = checker
 }
 
 // SetReady changes the readiness state exposed to the service manager.
@@ -61,14 +69,28 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
+// Close immediately closes all HTTP listeners and active connections.
+func (s *Server) Close() error {
+	s.SetReady(false)
+	return s.httpServer.Close()
+}
+
 func (s *Server) handleLive(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleReady(w http.ResponseWriter, request *http.Request) {
 	if !s.ready.Load() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 		return
+	}
+	if s.readiness != nil {
+		ctx, cancel := context.WithTimeout(request.Context(), s.readinessTimeout)
+		defer cancel()
+		if err := s.readiness.Ready(ctx); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
