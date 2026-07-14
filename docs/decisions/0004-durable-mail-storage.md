@@ -47,3 +47,26 @@ Content Hash用于物理去重，但每次SMTP投递仍创建独立Message Recor
 ## 接受条件
 
 上述Spike、备份恢复与LMTP E2E全部通过后，将状态改为“已接受”；任一核心Invariant无法证明时重新选择存储协议。
+
+## 2026-07-14阶段性实现证据
+
+已经完成：
+
+- Raw Source流式写入Staging，限制总字节和单行字节。
+- SHA-256 Content Key、文件`fsync`与同文件系统原子Hard Link安装。
+- 32路并发同内容写入只形成一个Object。
+- 写入取消、来源错误、超限、损坏Object与Staging Prune测试。
+- PostgreSQL 18.4固定Digest Integration Test。
+- Goose 3.27.2嵌入式Migration与并发Advisory Lock测试。
+- 多Recipient Message在同一Transaction提交；任一Inbox失效则全部回滚。
+- TCP LMTP到Content Store和PostgreSQL的真实端到端测试。
+- 普通与Race Integration均通过。
+- 固定Digest的Linux/amd64 Go 1.26.5环境中，全仓Test与Race通过，目录权限分支已真实执行。
+- Gosec v2.27.1零Issue，未使用 `#nosec`；govulncheck与Gitleaks通过。
+
+仍未完成，因此ADR保持“提议中”：
+
+- Linux进程在Write、Fsync、Link和DB Commit各阶段被强制终止后的恢复测试。
+- 真实Postfix队列重投与应用重启验证。
+- 数据库与Content Store一致性备份、恢复和Orphan/Missing扫描。
+- Linux生产文件系统上的容量、目录数量与尾延迟Benchmark。
