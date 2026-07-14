@@ -37,6 +37,10 @@ func TestMain(testingMain *testing.M) {
 }
 
 func runIntegrationTests(testingMain *testing.M) int {
+	if os.Getenv(deliveryCrashHelperEnvironment) == "1" {
+		integrationDataSourceName = os.Getenv(deliveryCrashDSNEnvironment)
+		return testingMain.Run()
+	}
 	if err := os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true"); err != nil {
 		fmt.Fprintf(os.Stderr, "disable testcontainers ryuk: %v\n", err)
 		return 1
