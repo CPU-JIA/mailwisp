@@ -28,9 +28,14 @@ func secureDirectory(path string) error {
 }
 
 func syncDirectory(path string) error {
-	directory, err := os.Open(path)
+	directoryRoot, err := os.OpenRoot(path)
 	if err != nil {
-		return fmt.Errorf("open directory %q for sync: %w", path, err)
+		return fmt.Errorf("open directory root %q for sync: %w", path, err)
+	}
+	defer directoryRoot.Close()
+	directory, err := directoryRoot.Open(".")
+	if err != nil {
+		return fmt.Errorf("open scoped directory %q for sync: %w", path, err)
 	}
 	defer directory.Close()
 	if err := directory.Sync(); err != nil {
