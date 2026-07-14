@@ -40,18 +40,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if logger == nil {
 		return nil, errors.New("logger is required")
 	}
-	poolConfig, err := pgxpool.ParseConfig(cfg.Postgres.DSN)
+	pool, err := openPostgresPool(ctx, cfg.Postgres)
 	if err != nil {
-		return nil, fmt.Errorf("parse postgres pool configuration: %w", err)
-	}
-	poolConfig.MinConns = cfg.Postgres.MinConnections
-	poolConfig.MaxConns = cfg.Postgres.MaxConnections
-	poolConfig.ConnConfig.ConnectTimeout = cfg.Postgres.ConnectTimeout
-	poolConfig.HealthCheckPeriod = 30 * time.Second
-	poolConfig.MaxConnIdleTime = 5 * time.Minute
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
-	if err != nil {
-		return nil, fmt.Errorf("create postgres pool: %w", err)
+		return nil, err
 	}
 	cleanupPool := true
 	defer func() {
@@ -100,13 +91,24 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 }
 
 // Run starts all services, waits for cancellation or failure, and shuts down.
-func (a *App) Run(ctx context.Context) error {
+func (a *App) Run(ctx context.Context) (returnError error) {
 	defer a.pool.Close()
 	startupContext, startupCancel := context.WithTimeout(ctx, a.config.Postgres.ConnectTimeout)
 	defer startupCancel()
 	if err := a.repository.Ready(startupContext); err != nil {
 		return fmt.Errorf("verify postgres readiness: %w", err)
 	}
+	serviceLease, err := postgres.AcquireServiceLease(startupContext, a.config.Postgres.DSN)
+	if err != nil {
+		return fmt.Errorf("acquire service maintenance lease: %w", err)
+	}
+	defer func() {
+		releaseContext, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		if err := serviceLease.Release(releaseContext); err != nil {
+			returnError = errors.Join(returnError, fmt.Errorf("release service maintenance lease: %w", err))
+		}
+	}()
 	startupCancel()
 
 	lmtpListener, err := net.Listen("tcp", a.config.LMTP.Addr)

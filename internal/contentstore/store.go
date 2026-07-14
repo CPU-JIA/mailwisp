@@ -234,7 +234,10 @@ func (s *Store) Delete(ref message.ContentRef) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return fmt.Errorf("delete content object: %w", err)
 	}
 	if err := syncDirectory(filepath.Dir(path)); err != nil {
