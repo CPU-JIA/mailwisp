@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -190,6 +191,28 @@ func TestPostgresCommandEnvironmentRejectsUnsupportedRouting(t *testing.T) {
 		}
 		if _, err := postgresCommandEnvironment(config); err == nil {
 			t.Fatalf("postgresCommandEnvironment(%q) error = nil", dsn)
+		}
+	}
+}
+
+func TestCreateRestoreServiceFileContainsNoConnectionData(t *testing.T) {
+	t.Parallel()
+
+	path, err := createRestoreServiceFile()
+	if err != nil {
+		t.Fatalf("createRestoreServiceFile() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(service file) error = %v", err)
+	}
+	if string(content) != restoreServiceFileContent {
+		t.Fatalf("service file = %q, want %q", content, restoreServiceFileContent)
+	}
+	for _, secret := range []string{"host", "port", "dbname", "user", "password", "sslmode"} {
+		if strings.Contains(strings.ToLower(string(content)), secret+"=") {
+			t.Fatalf("service file contains connection field %q", secret)
 		}
 	}
 }

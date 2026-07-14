@@ -97,8 +97,7 @@ func Restore(ctx context.Context, bundleRoot, targetContentRoot string, database
 
 	metadata, restoreDatabaseErr := database.Restore(ctx, databaseDump)
 	if restoreDatabaseErr != nil {
-		cleanupErr := removeRestoredContent(parent, absoluteContentRoot)
-		return Manifest{}, errors.Join(restoreDatabaseErr, cleanupErr)
+		return Manifest{}, restoreDatabaseErr
 	}
 	if err := validateRestoredMetadata(verified.Manifest, metadata); err != nil {
 		return Manifest{}, err
@@ -115,16 +114,6 @@ func Restore(ctx context.Context, bundleRoot, targetContentRoot string, database
 		return Manifest{}, fmt.Errorf("%w: restored backup has %d unresolved finding(s)", contentstore.ErrInconsistentContent, summary.Unresolved())
 	}
 	return verified.Manifest, nil
-}
-
-func removeRestoredContent(parent, root string) error {
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("remove content after database restore failure: %w", err)
-	}
-	if err := syncDirectory(parent); err != nil {
-		return fmt.Errorf("sync content parent after restore failure: %w", err)
-	}
-	return nil
 }
 
 func validateRestoredMetadata(manifest Manifest, restored DatabaseMetadata) error {

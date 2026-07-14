@@ -24,8 +24,11 @@ import (
 const (
 	pgDumpExecutable    = "pg_dump"
 	pgRestoreExecutable = "pg_restore"
+	restoreServiceName  = "mailwisp_restore"
 	maxToolErrorBytes   = 64 << 10
 )
+
+const restoreServiceFileContent = "[" + restoreServiceName + "]\napplication_name=mailwisp_restore\n"
 
 var postgresVersionPattern = regexp.MustCompile(`\b([0-9]+(?:\.[0-9]+)+)\b`)
 
@@ -140,15 +143,27 @@ func (t *BackupTool) Restore(ctx context.Context, source io.Reader) (backup.Data
 	if err := validateToolMajors(metadata); err != nil {
 		return backup.DatabaseMetadata{}, err
 	}
+	serviceFile, err := createRestoreServiceFile()
+	if err != nil {
+		return backup.DatabaseMetadata{}, err
+	}
 	command := exec.CommandContext(ctx, pgRestoreExecutable,
+		"--dbname=service="+restoreServiceName,
 		"--single-transaction",
 		"--exit-on-error",
 		"--no-owner",
 		"--no-privileges",
 	)
-	if err := t.run(command, source, io.Discard); err != nil {
-		return backup.DatabaseMetadata{}, fmt.Errorf("run pg_restore: %w", err)
+	restoreErr := t.run(command, source, io.Discard, environmentVariable{name: "PGSERVICEFILE", value: serviceFile})
+	removeServiceErr := os.Remove(serviceFile)
+	if restoreErr != nil {
+		return backup.DatabaseMetadata{}, errors.Join(
+			wrapError("run pg_restore", restoreErr),
+			wrapError("remove temporary postgres service file", removeServiceErr),
+		)
 	}
+	// The file contains only a fixed non-secret selector. Cleanup failure after
+	// pg_restore commits must not turn success into a destructive restore error.
 	if err := t.repository.Ready(ctx); err != nil {
 		return backup.DatabaseMetadata{}, fmt.Errorf("verify restored postgres schema: %w", err)
 	}
@@ -218,11 +233,14 @@ func (t *BackupTool) migrationVersion(ctx context.Context) (int64, error) {
 	return version, nil
 }
 
-func (t *BackupTool) run(command *exec.Cmd, input io.Reader, output io.Writer) error {
+func (t *BackupTool) run(command *exec.Cmd, input io.Reader, output io.Writer, extraEnvironment ...environmentVariable) error {
 	if command == nil {
 		return errors.New("postgres command is required")
 	}
-	command.Env = environmentWithPostgresConnection(os.Environ(), t.connectionEnvironment)
+	connectionEnvironment := make([]environmentVariable, 0, len(t.connectionEnvironment)+len(extraEnvironment))
+	connectionEnvironment = append(connectionEnvironment, t.connectionEnvironment...)
+	connectionEnvironment = append(connectionEnvironment, extraEnvironment...)
+	command.Env = environmentWithPostgresConnection(os.Environ(), connectionEnvironment)
 	command.Stdin = input
 	command.Stdout = output
 	stderr := &boundedBuffer{limit: maxToolErrorBytes}
@@ -297,6 +315,42 @@ func postgreSQLMajor(version string) (string, error) {
 		return parts[0] + "." + parts[1], nil
 	}
 	return parts[0], nil
+}
+
+func createRestoreServiceFile() (string, error) {
+	file, err := os.CreateTemp("", "mailwisp-pgservice-*.conf")
+	if err != nil {
+		return "", fmt.Errorf("create temporary postgres service file: %w", err)
+	}
+	path := file.Name()
+	complete := false
+	defer func() {
+		if !complete {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return "", fmt.Errorf("restrict temporary postgres service file: %w", err)
+	}
+	if _, err := io.WriteString(file, restoreServiceFileContent); err != nil {
+		return "", fmt.Errorf("write temporary postgres service file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return "", fmt.Errorf("sync temporary postgres service file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close temporary postgres service file: %w", err)
+	}
+	complete = true
+	return path, nil
+}
+
+func wrapError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 type environmentVariable struct {

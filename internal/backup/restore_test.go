@@ -57,15 +57,15 @@ func TestRestoreRejectsNonEmptyDatabaseBeforeContentMutation(t *testing.T) {
 	}
 }
 
-func TestRestoreDatabaseFailureRemovesInstalledContent(t *testing.T) {
+func TestRestoreDatabaseFailurePreservesInstalledContent(t *testing.T) {
 	bundleRoot, _ := createRestorableBundle(t)
 	contentRoot := filepath.Join(t.TempDir(), "content")
 	database := &fakeRestoreDatabase{empty: true, metadata: testDatabaseMetadata(), restoreErr: errors.New("restore failed")}
 	if _, err := Restore(context.Background(), bundleRoot, contentRoot, database); err == nil {
 		t.Fatal("Restore(database failure) error = nil")
 	}
-	if _, err := os.Stat(contentRoot); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("content root after database failure error = %v, want not exist", err)
+	if _, err := os.Stat(contentRoot); err != nil {
+		t.Fatalf("content root after ambiguous database failure error = %v", err)
 	}
 	if !database.empty {
 		t.Fatal("failed single-transaction restore changed fake database")

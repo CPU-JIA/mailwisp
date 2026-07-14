@@ -61,7 +61,7 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 5. 将Content Archive解压到目标同级随机目录，逐Object验证Canonical Path、Size与SHA-256，拒绝Symlink、Hard Link、Device与重复Path。
 6. 同步文件与目录后，先原子Rename为目标Content Root。
 7. 使用官方`pg_restore --single-transaction --exit-on-error --no-owner --no-privileges`恢复数据库。
-8. Restore失败时数据库Transaction必须回滚；已安装Content作为无数据库引用的Orphan执行安全回收。
+8. `pg_restore`使用Single Transaction降低半提交风险；但网络或进程终止可能发生在Server Commit后、客户端确认前，因此任何Restore错误都保留已安装Content，禁止自动删除并扩大为Missing。
 9. Restore成功后运行Migration Readiness与完整Reconciliation；任何Missing、Corrupt或Orphan都使恢复失败。
 
 先安装Content、后提交数据库，保证不会出现数据库已可见而Raw MIME尚未就位的窗口。恢复期间服务仍由独占维护锁阻止启动。
@@ -69,7 +69,7 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 ### PostgreSQL工具
 
 - 不自行实现表级JSON/CSV备份协议，避免每次Schema演进复制`pg_dump`已经解决的依赖、类型、Sequence和DDL问题。
-- Adapter只调用官方`pg_dump`与`pg_restore`，将已解析的Host、Port、Database、User、Password与TLS策略分别写入受控libpq环境；原始DSN与密码不进入Command Line或日志。
+- Adapter只调用官方`pg_dump`与`pg_restore`，将已解析的Host、Port、Database、User、Password与TLS策略分别写入受控libpq环境。由于`pg_restore`强制要求`--dbname`，命令参数只传入固定的`service=mailwisp_restore`选择器；临时Service File内容固定且不含连接字段，原始DSN与密码不进入Command Line、Service File或日志。
 - V1 Backup Tool明确只支持Reference Profile的单Host DSN；Multi-host与`target_session_attrs`在可证明无语义损失前拒绝执行。
 - 客户端Major Version必须与PostgreSQL Server Major一致；Reference Profile固定验证18.4工具链。
 - Go Bundle层不依赖Docker。Integration Test使用固定Digest的PostgreSQL 18.4容器与精确18.4客户端；Reference部署要求宿主机提供同Major官方客户端。
@@ -103,7 +103,7 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 - Content Archive确定性顺序、逐Object Digest验证、路径穿越与重复Path拒绝。
 - Partial目录生成、Manifest最后写入、文件与目录同步、最终原子Rename发布。
 - Bundle篡改、未知字段、额外文件、失败不发布与空目标恢复单元测试。
-- Restore前完整验包，Content先安装，数据库使用Single Transaction恢复，恢复后完整Reconciliation。
+- Restore前完整验包，Content先安装，数据库使用Single Transaction恢复；失败时保守保留Content，成功后完整Reconciliation。
 - `mailwisp backup <directory>`与`mailwisp restore <bundle-directory>`正式命令及独占维护锁。
 - `pg_dump`与`pg_restore`固定命令入口；连接字段只通过清理后的libpq子进程环境传递，错误输出有界并执行Secret Redaction。
 - PostgreSQL Server、`pg_dump`与`pg_restore`Major一致性验证；Gosec零Issue且未使用`#nosec`。
