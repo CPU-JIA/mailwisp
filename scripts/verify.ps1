@@ -73,6 +73,9 @@ try {
     Invoke-Native -Name 'go test' -Command { go test ./... }
     Invoke-Native -Name 'go test -race' -Command { go test -race ./... }
     Invoke-Native -Name 'go vet' -Command { go vet ./... }
+    Invoke-Native -Name 'bounded MIME parser fuzzing' -Command {
+        go test ./internal/mail -run '^$' -fuzz '^FuzzParserNeverPanics$' -fuzztime 10s
+    }
 
     Assert-PostgreSQLToolVersion -CommandName 'pg_dump' -Version '18.4'
     Assert-PostgreSQLToolVersion -CommandName 'pg_restore' -Version '18.4'
