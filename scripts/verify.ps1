@@ -63,6 +63,41 @@ function Assert-PostgreSQLToolVersion {
     }
 }
 
+function Assert-MailWispTokenDetection {
+    param(
+        [Parameter(Mandatory)]
+        [string]$RepositoryRoot
+    )
+
+    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $fixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $temporaryRoot ("mailwisp-gitleaks-" + [guid]::NewGuid().ToString('N'))))
+    if (-not $fixtureRoot.StartsWith($temporaryRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Gitleaks fixture path escaped the temporary directory.'
+    }
+    [System.IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+    try {
+        $kid = 'a' * 24
+        $secret = 'A' * 43
+        foreach ($tokenType in @('pat', 'cap', 'ses', 'whsec')) {
+            $fixture = 'credential=' + 'wisp_' + $tokenType + '_v1_' + $kid + '_' + $secret
+            [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'credential.txt'), $fixture)
+
+            & gitleaks dir $fixtureRoot `
+                --config (Join-Path $RepositoryRoot '.gitleaks.toml') `
+                --no-banner `
+                --redact `
+                --exit-code 23 *> $null
+            if ($LASTEXITCODE -ne 23) {
+                throw "MailWisp $tokenType token scanner probe returned exit code $LASTEXITCODE instead of 23."
+            }
+        }
+    } finally {
+        if ([System.IO.Directory]::Exists($fixtureRoot)) {
+            [System.IO.Directory]::Delete($fixtureRoot, $true)
+        }
+    }
+}
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $env:GOTOOLCHAIN = 'go1.26.5'
 
@@ -75,6 +110,9 @@ try {
     Invoke-Native -Name 'go vet' -Command { go vet ./... }
     Invoke-Native -Name 'bounded MIME parser fuzzing' -Command {
         go test ./internal/mail -run '^$' -fuzz '^FuzzParserNeverPanics$' -fuzztime 10s
+    }
+    Invoke-Native -Name 'canonical token parser fuzzing' -Command {
+        go test ./internal/auth -run '^$' -fuzz '^FuzzParseTokenNeverPanics$' -fuzztime 10s
     }
 
     Assert-PostgreSQLToolVersion -CommandName 'pg_dump' -Version '18.4'
@@ -141,8 +179,9 @@ try {
     }
 
     Assert-GoToolVersion -CommandName 'gitleaks' -ModulePath 'github.com/zricethezav/gitleaks/v8' -Version 'v8.30.1'
-    Invoke-Native -Name 'gitleaks working tree scan' -Command { gitleaks dir . --no-banner --redact }
-    Invoke-Native -Name 'gitleaks git history scan' -Command { gitleaks git --no-banner --redact }
+    Assert-MailWispTokenDetection -RepositoryRoot $repositoryRoot
+    Invoke-Native -Name 'gitleaks working tree scan' -Command { gitleaks dir . --config .gitleaks.toml --no-banner --redact }
+    Invoke-Native -Name 'gitleaks git history scan' -Command { gitleaks git --config .gitleaks.toml --no-banner --redact }
 
     $frontendRoot = Join-Path $repositoryRoot 'spikes/frontend'
     if (Test-Path -LiteralPath (Join-Path $frontendRoot 'package-lock.json')) {

@@ -1,0 +1,10 @@
+title = "MailWisp secret scanning policy"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "mailwisp-opaque-token-v1"
+description = "MailWisp canonical opaque token"
+regex = '''wisp_(pat|cap|ses|whsec)_v1_[0-9a-f]{24}_[A-Za-z0-9_-]{43}'''
+keywords = ["wisp_"]
