@@ -71,17 +71,20 @@ MailWisp 是面向自托管场景的生产级临时邮箱服务。单台Linux服
 本节是当前研究假设，不是不可修改的既定结论。正式业务实现前必须通过竞品、生产约束、基准测试、维护状态和故障模型研究重新验证。证据证明存在更优方案时，应通过ADR更新架构；收益不足的组件可以舍弃。
 
 ```text
-Host Nginx -> 静态前端 / Go HTTP API
+Host Web Edge -> 静态Vue前端 / Go HTTP API
 Postfix -> LMTP -> Go Application
 Go Application -> PostgreSQL
-Go Application -> Redis（仅限流和短期缓存）
+Go Application -> Local Content Store
+Go Application -> Redis（Extended Profile按证据启用）
 ```
 
 当前候选约束：
 
 - 优先评估一个Go应用二进制；如果隔离、可靠性或维护证据证明拆分更优，可以调整。
 - PostgreSQL是唯一持久化事实来源。
+- Raw MIME与大附件使用独立Content Storage语义；Reference Profile优先本地文件，Extended Profile可替换S3-compatible实现。
 - Redis不得承载恢复用户数据所必需的唯一副本。
+- Reference Profile默认不依赖Redis；只有多Replica热点限流或临时协调收益被测量证明时才启用。
 - Postfix负责公网SMTP兼容、持久队列和失败重试。
 - 默认不使用PgBouncer，只有生产测量证明需要时才重新评估。
 - 不因潮流引入Kafka、RabbitMQ、Kubernetes、Service Mesh或内部RPC层；真实需求与证据证明必要时，必须通过ADR与成本验证。
@@ -113,7 +116,7 @@ internal/mailbox/    邮箱领域
 internal/message/    收件消息领域
 internal/jobs/       定时维护任务
 internal/postgres/   PostgreSQL适配器
-internal/rediscache/ Redis适配器
+internal/rediscache/ 可选Redis适配器
 internal/telemetry/  日志、健康检查与指标
 migrations/          不可变的版本化SQL迁移
 web/                 前端源代码与构建产物
