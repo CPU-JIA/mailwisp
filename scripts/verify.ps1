@@ -42,6 +42,27 @@ function Assert-GoToolVersion {
     }
 }
 
+function Assert-PostgreSQLToolVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CommandName,
+
+        [Parameter(Mandatory)]
+        [string]$Version
+    )
+
+    if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
+        throw "$CommandName未安装，PostgreSQL备份恢复验证不得跳过。"
+    }
+    $reported = & $CommandName --version | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法读取$CommandName版本。"
+    }
+    if ($reported -notmatch "^$([regex]::Escape($CommandName)) \(PostgreSQL\) $([regex]::Escape($Version))(?:\s|$)") {
+        throw "$CommandName版本不符合要求，必须为PostgreSQL $Version。实际：$($reported.Trim())"
+    }
+}
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $env:GOTOOLCHAIN = 'go1.26.5'
 
@@ -52,6 +73,9 @@ try {
     Invoke-Native -Name 'go test' -Command { go test ./... }
     Invoke-Native -Name 'go test -race' -Command { go test -race ./... }
     Invoke-Native -Name 'go vet' -Command { go vet ./... }
+
+    Assert-PostgreSQLToolVersion -CommandName 'pg_dump' -Version '18.4'
+    Assert-PostgreSQLToolVersion -CommandName 'pg_restore' -Version '18.4'
 
     if (Get-Command docker -ErrorAction SilentlyContinue) {
         Invoke-Native -Name 'docker info' -Command { docker info --format '{{.ServerVersion}}' }
