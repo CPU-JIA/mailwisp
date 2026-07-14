@@ -1,6 +1,6 @@
 # 前端Framework Technical Spike计划与阶段性判断
 
-状态：Technical Spike设计完成，最终选择待实际构建验证
+状态：第一轮Technical Spike完成，Vue 3进入推荐候选
 日期：2026-07-14
 
 ## 固定比较场景
@@ -98,6 +98,102 @@ i18n必须：
 - 不把接口错误英文直接展示给用户；使用Error Code映射本地文案。
 - 支持长文本、复数、空状态和窄屏布局。
 
-## 暂定方向
+## 第一轮实际结果
 
-如果Vertical Slice的构建、测试和Accessibility结果没有反例，Vue 3 + TypeScript是当前平衡候选；它不是已经批准的最终方案。原生TypeScript只有在我们能证明不会重新制造旧项目维护问题时才优先，React和Svelte只有在实测显著改善质量或交付能力时才采用。
+统一环境：
+
+- Node.js 22.20.0。
+- npm 11.15.0。
+- Vite 8.1.4。
+- TypeScript 6.0.3。
+- Chrome Headless + Playwright 1.61.1。
+- 四套方案共享完全相同的Data、i18n Message、Design Token CSS和测试流程。
+
+功能切片均包含：中英文、System/Light/Dark/Mist主题、Token登录、Inbox列表、Message详情、返回与退出。
+
+### Source LOC
+
+| 方案 | 方案专属文件 | 方案专属LOC | 共享LOC |
+|---|---:|---:|---:|
+| 原生TypeScript | 2 | 101 | 162 |
+| Vue | 3 | 66 | 162 |
+| React | 2 | 59 | 162 |
+| Svelte | 4 | 68 | 162 |
+
+React专属LOC最少，但大量JSX集中在长行中，LOC不能单独代表可读性。原生方案为了管理DOM、Escape与事件重绑定，代码明显更多，并使用整页 `innerHTML` 重渲染；若按生产CSP和安全要求改成逐节点Component，代码量还会继续上升。
+
+### Production Build
+
+| 方案 | 总Raw Bytes | 总Gzip Bytes | 总Brotli Bytes | JS Gzip |
+|---|---:|---:|---:|---:|
+| 原生TypeScript | 8,905 | 3,712 | 2,943 | 2.17 KB |
+| Vue | 70,075 | 27,599 | 24,851 | 26.38 KB |
+| React | 198,179 | 62,261 | 53,531 | 61.53 KB |
+| Svelte | 46,160 | 18,123 | 15,980 | 16.74 KB |
+
+共同CSS为3.44 KB Raw、1.27 KB Gzip。结果来自同一Vite Production Build，未引入Router、完整i18n Library、Form Library和UI Component Library，因此只能比较这个固定切片的基础Runtime成本。
+
+### Type Check与Browser E2E
+
+四套方案全部通过：
+
+```text
+tsc / vue-tsc / svelte-check
+Vite production build
+Playwright Chrome E2E
+```
+
+E2E对每套方案验证：
+
+- 中文首屏。
+- 切换英文并同步HTML `lang`。
+- 切换Mist Theme并同步 `data-theme`。
+- Token登录。
+- Inbox列表。
+- Message详情与返回。
+- Console无Error。
+- axe-core Accessibility扫描无Violation。
+
+首次E2E发现所有方案都因缺失Favicon产生Console 404，修复入口后重新执行，最终4项全部通过。没有通过Ignore List掩盖错误。
+
+首次加入axe-core后，Mist主题的Muted Content在Soft Surface上对比度只有4.1:1，低于WCAG AA的4.5:1，四套方案同时失败。将共享Semantic Token从 `#55777d` 调整为 `#45686e` 后，四套方案重新构建并全部通过。这个结果证明Theme必须建立在共享Token与自动化Accessibility门禁上，而不是为每个页面维护独立Dark/Color覆盖。
+
+### Dependency与License
+
+- Vue、React、Svelte、Vite、vue-i18n均为MIT License。
+- `npm audit` 报告0个已知漏洞。
+- axe-core 4.12.1与Playwright 1.61.1固定版本进入Spike门禁。
+- 所有依赖使用精确版本，`package-lock.json`纳入仓库。
+
+## 阶段性取舍
+
+### 淘汰原生TypeScript作为主控制台方案
+
+它的Bundle最小，但相同功能需要最多手写生命周期代码。旧项目已经证明原生大文件在功能增长后容易形成字符串模板、Inline Event和CSS覆盖堆积。原生方案仍适合极小Embed Widget，不适合MailWisp完整管理控制台。
+
+### 淘汰React作为首选方案
+
+React生态强，但在本切片中Runtime体积最高，且MailWisp没有必须依赖React生态的独占需求。选择React不会直接提升邮件产品正确性，却会增加Router、State、Form和生态决策面。
+
+### Svelte保留为性能备选
+
+Svelte的产物明显小于Vue，Component表达也清晰。风险在于长期生态、Svelte 5语法演进、i18n与复杂管理组件选择仍需更多验证。如果未来Full Console证明Vue Runtime成为真实瓶颈，Svelte是首要替代方案。
+
+### 推荐Vue 3
+
+Vue比Svelte多约9.5 KB Gzip、比原生多约23.9 KB Gzip，但换来成熟Component模型、TypeScript、vue-i18n、Accessibility/Test生态和更低的长期组织风险。对一个包含Admin、Mailbox、Message、Domain、Token、Webhook和API Docs的控制台，这个网络成本在Content Hash与Brotli缓存后可接受。
+
+当前推荐组合：
+
+```text
+Vue 3.5.39
+Vite 8.1.4
+TypeScript 6.0.3
+vue-i18n 11.4.6
+Pinia 仅在跨页面状态复杂度证明需要时引入
+Playwright 1.61.1
+```
+
+## 当前结论
+
+Vue 3 + TypeScript是当前最平衡且真实可实现的前端方案。最终ADR仍需补充完整i18n、Router、Form、Accessibility与截图回归Spike，但第一轮证据已经足以停止在四个Framework之间反复摇摆；后续验证聚焦Vue能否满足产品质量门槛，而不是继续做无边界框架比较。
