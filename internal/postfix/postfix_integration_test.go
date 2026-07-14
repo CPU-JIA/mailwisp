@@ -220,6 +220,7 @@ func startPostfix(t *testing.T, lmtpPort int) *postfixFixture {
 			t.Errorf("terminate Postfix integration container: %v", err)
 		}
 	})
+	waitForSMTP(t, fixture.smtpAddress(t))
 	return fixture
 }
 
