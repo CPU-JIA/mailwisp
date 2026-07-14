@@ -66,6 +66,8 @@ Unit、Race和Fuzz Seed覆盖：
 
 GitHub Actions固定执行10秒随机Fuzz。首次本地Windows Benchmark样本约48 KiB，包含4 KiB Text与32 KiB Base64 Attachment；Intel i7-14650HX、Go 1.26.5条件下三轮结果为272.94–315.41 MiB/s、约615.7 KiB/op、122 allocs/op。该数据只作为回归基线，不代表生产容量结论。
 
+首次完整远端门禁已由GitHub Actions Run [29363817390](https://github.com/CPU-JIA/mailwisp/actions/runs/29363817390)验证通过，包含固定Linux全量门禁、Windows原生Unit/Race/Vet与GitGuardian。该Run验证的是提交`ff60d8c`；证据同步提交本身仍必须重新通过PR门禁。
+
 ## 暂不包含
 
 - Parser Worker领取、重试与`parse_status`持久化；
