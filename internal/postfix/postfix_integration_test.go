@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -45,15 +46,21 @@ func TestPostfixLMTPRetrySemantics(t *testing.T) {
 	postfix := startPostfix(t, lmtpPort)
 
 	assertPostfixVersion(t, postfix.container)
-	t.Run("队列跨Postfix重启后重投", func(t *testing.T) {
+	if !t.Run("队列跨Postfix重启后重投", func(t *testing.T) {
 		testQueueSurvivesRestart(t, postfix, lmtpPort)
-	})
-	t.Run("LMTP临时失败保留队列并重试", func(t *testing.T) {
+	}) {
+		return
+	}
+	if !t.Run("LMTP临时失败保留队列并重试", func(t *testing.T) {
 		testTemporaryFailureRetries(t, postfix, lmtpPort)
-	})
-	t.Run("确认丢失允许独立重复消息并复用内容", func(t *testing.T) {
+	}) {
+		return
+	}
+	if !t.Run("确认丢失允许独立重复消息并复用内容", func(t *testing.T) {
 		testLostAcknowledgementDuplicates(t, postfix, lmtpPort)
-	})
+	}) {
+		return
+	}
 	t.Run("未知收件人永久拒绝", func(t *testing.T) {
 		testUnknownRecipientIsPermanent(t, postfix, lmtpPort)
 	})
@@ -186,12 +193,14 @@ func startPostfix(t *testing.T, lmtpPort int) *postfixFixture {
 		Env: map[string]string{
 			"MAILWISP_LMTP_PORT": fmt.Sprintf("%d", lmtpPort),
 		},
-		ExposedPorts:    []string{postfixSMTPPort},
-		HostAccessPorts: []int{lmtpPort},
+		ExposedPorts: []string{postfixSMTPPort},
 		Mounts: testcontainers.Mounts(
 			testcontainers.VolumeMount(queueVolume, "/var/spool/postfix"),
 		),
 		WaitingFor: wait.ForListeningPort(postfixSMTPPort).WithStartupTimeout(2 * time.Minute),
+		HostConfigModifier: func(hostConfig *containertypes.HostConfig) {
+			hostConfig.ExtraHosts = append(hostConfig.ExtraHosts, "host.testcontainers.internal:host-gateway")
+		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -542,7 +551,7 @@ type lmtpService struct {
 
 func startLMTP(t *testing.T, port int, resolver lmtp.InboxResolver, receiver lmtp.MessageReceiver, wrap func(net.Listener) net.Listener) *lmtpService {
 	t.Helper()
-	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		t.Fatalf("listen for Go LMTP integration server: %v", err)
 	}
@@ -673,7 +682,7 @@ func countContentObjects(t *testing.T, root string) int {
 
 func reserveTCPPort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatalf("reserve LMTP port: %v", err)
 	}
