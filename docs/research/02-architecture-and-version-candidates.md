@@ -1,6 +1,6 @@
 # 架构、工具链与固定版本候选
 
-状态：一手资料初步调研完成，等待兼容研究交叉验证
+状态：阶段性验证完成，Go与前端基线已锁定，其余组件继续Technical Spike
 调研日期：2026-07-14
 
 本文件记录候选与证据，不代表所有技术已经最终采用。正式锁定前仍需Technical Spike、兼容矩阵、Benchmark与恢复测试。
@@ -19,7 +19,7 @@
 
 | 组件 | 2026-07-14候选版本 | 初步意见 | 一手来源 |
 |---|---:|---|---|
-| Go | 1.26.5 | 新项目优先Technical Spike；生态不兼容时退回1.25.12 | https://go.dev/dl/?mode=json |
+| Go | 1.26.5 | 已通过编译、测试、Race、Vet与固定版漏洞扫描，锁定为工程基线 | https://go.dev/dl/?mode=json |
 | chi | v5.3.0 | 候选HTTP Router，保持 `net/http` 兼容与较小依赖面 | https://github.com/go-chi/chi/releases/tag/v5.3.0 |
 | Gin | v1.12.0 | 功能完整，但本项目暂不优先，需与chi做实现复杂度对比 | https://github.com/gin-gonic/gin/releases/tag/v1.12.0 |
 | pgx | v5.10.0 | PostgreSQL Driver与Pool首选候选 | https://api.github.com/repos/jackc/pgx/tags |
@@ -47,6 +47,19 @@ Persistence: pgx v5.10.0 -> PostgreSQL 18.4
 Ephemeral state: Redis 8.8.0
 Migration: Goose v3.27.2候选
 ```
+
+### Go 1.26.5 Technical Spike
+
+2026-07-14在Windows开发环境完成以下验证：
+
+```text
+GOTOOLCHAIN=go1.26.5 go test ./...
+GOTOOLCHAIN=go1.26.5 go test -race ./...
+GOTOOLCHAIN=go1.26.5 go vet ./...
+govulncheck v1.6.0（使用Go 1.26.5构建）
+```
+
+全部通过，`govulncheck`报告0个可达漏洞。首次验证暴露出原有Scanner由Go 1.25.4构建，无法加载Go 1.26标准库；在保持Scanner版本为v1.6.0的前提下，用Go 1.26.5重新构建后通过。基于这条完整证据链，仓库通过 `go.mod`、`.go-version` 与验证脚本同时固定Go 1.26.5，不再保留1.25作为默认回退。
 
 ### 为什么暂不采用Gin
 
