@@ -1,6 +1,6 @@
 # ADR 0006：一致性Backup Bundle与空目标恢复
 
-状态：提议中，等待固定Linux门禁与Reference恢复演练
+状态：提议中，等待Reference恢复演练
 日期：2026-07-15
 
 ## 背景
@@ -107,10 +107,9 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 - `mailwisp backup <directory>`与`mailwisp restore <bundle-directory>`正式命令及独占维护锁。
 - `pg_dump`与`pg_restore`固定命令入口；连接字段只通过清理后的libpq子进程环境传递，错误输出有界并执行Secret Redaction。
 - PostgreSQL Server、`pg_dump`与`pg_restore`Major一致性验证；Gosec零Issue且未使用`#nosec`。
-- 已实现固定PostgreSQL 18.4真实Bundle Round-trip Integration Test，并接入GitHub Actions所需的精确18.4客户端安装与版本门禁。
+- 固定PostgreSQL 18.4真实Bundle Round-trip Integration与Race Test已在GitHub Actions Linux完整门禁通过。
 
 尚未完成：
 
-- 新增真实Round-trip必须在GitHub Actions Linux与Race门禁中实际通过。
 - 至少一次Reference Linux文件系统上的备份、删除、恢复、应用读取与人工Runbook演练。
 - 断电或宿主机硬重启条件下的Bundle发布与恢复验证。
