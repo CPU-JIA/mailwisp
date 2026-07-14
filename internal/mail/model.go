@@ -3,25 +3,28 @@ package mail
 
 import "time"
 
+// ParserRevision identifies the persisted ParsedMessage schema and semantics.
+const ParserRevision = 1
+
 // UnsafeHTML contains decoded but unsanitized email HTML. It must never be
 // inserted into a trusted DOM without a separate sanitization and sandbox boundary.
 type UnsafeHTML string
 
 // Address contains one untrusted display name and address parsed from a message header.
 type Address struct {
-	Name    string
-	Address string
+	Name    string `json:"name"`
+	Address string `json:"address"`
 }
 
 // Attachment contains metadata for one decoded non-body MIME leaf. The bytes
 // remain recoverable from the durable Raw MIME source by PartPath.
 type Attachment struct {
-	PartPath    string
-	FileName    string
-	ContentType string
-	Disposition string
-	ContentID   string
-	SizeBytes   int64
+	PartPath    string `json:"part_path"`
+	FileName    string `json:"file_name"`
+	ContentType string `json:"content_type"`
+	Disposition string `json:"disposition"`
+	ContentID   string `json:"content_id"`
+	SizeBytes   int64  `json:"size_bytes"`
 }
 
 // WarningCode identifies one recoverable parser condition.
@@ -43,9 +46,9 @@ const (
 
 // Warning records a recoverable condition without including raw message content.
 type Warning struct {
-	Code     WarningCode
-	PartPath string
-	Detail   string
+	Code     WarningCode `json:"code"`
+	PartPath string      `json:"part_path"`
+	Detail   string      `json:"detail"`
 }
 
 // ParsedMessage is the bounded, decoded representation derived from Raw MIME.

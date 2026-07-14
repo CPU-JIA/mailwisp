@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"mailwisp/internal/config"
+	"mailwisp/internal/message"
 )
 
 func TestNewComposesApplicationWithoutConnecting(t *testing.T) {
@@ -22,7 +24,7 @@ func TestNewComposesApplicationWithoutConnecting(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	application.pool.Close()
-	if application.http == nil || application.lmtp == nil || application.repository == nil {
+	if application.http == nil || application.lmtp == nil || application.repository == nil || application.parserWorker == nil {
 		t.Fatal("New() did not compose all required services")
 	}
 }
@@ -70,6 +72,39 @@ func TestServiceResultClassification(t *testing.T) {
 	}
 }
 
+func TestWakingReceiverNotifiesOnlyAfterDurableSuccess(t *testing.T) {
+	t.Parallel()
+
+	inboxID := message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12")
+	store := &appContentStoreStub{}
+	repository := &appDeliveryRepositoryStub{messages: []message.StoredMessage{{ID: "message-id", InboxID: inboxID}}}
+	receiver, err := message.NewReceiver(store, repository)
+	if err != nil {
+		t.Fatalf("message.NewReceiver() error = %v", err)
+	}
+	wakes := 0
+	waking := &wakingReceiver{receiver: receiver, wake: func() { wakes++ }}
+	request := message.ReceiveRequest{
+		EnvelopeSender: "sender@example.com",
+		Recipients:     []message.InboxID{inboxID},
+		Raw:            bytes.NewReader([]byte("raw")),
+	}
+	if _, err := waking.Receive(context.Background(), request); err != nil {
+		t.Fatalf("Receive(success) error = %v", err)
+	}
+	if wakes != 1 {
+		t.Fatalf("wakes after success = %d, want 1", wakes)
+	}
+	repository.err = errors.New("database unavailable")
+	request.Raw = bytes.NewReader([]byte("raw"))
+	if _, err := waking.Receive(context.Background(), request); err == nil {
+		t.Fatal("Receive(failure) error = nil")
+	}
+	if wakes != 1 {
+		t.Fatalf("wakes after failure = %d, want 1", wakes)
+	}
+}
+
 func testConfig(t *testing.T) config.Config {
 	t.Helper()
 	return config.Config{
@@ -99,6 +134,15 @@ func testConfig(t *testing.T) config.Config {
 			MaxConnections: 1,
 			ConnectTimeout: time.Second,
 		},
+		Parser: config.Parser{
+			Workers:       1,
+			PollInterval:  100 * time.Millisecond,
+			ParseTimeout:  100 * time.Millisecond,
+			LeaseDuration: time.Second,
+			MaxAttempts:   3,
+			RetryBase:     100 * time.Millisecond,
+			RetryMax:      time.Second,
+		},
 		Content: config.Content{
 			Root:     filepath.Join(t.TempDir(), "content"),
 			MaxBytes: 1 << 20,
@@ -110,4 +154,23 @@ func testConfig(t *testing.T) config.Config {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type appContentStoreStub struct{}
+
+func (s *appContentStoreStub) Put(_ context.Context, source io.Reader) (message.ContentRef, error) {
+	content, err := io.ReadAll(source)
+	if err != nil {
+		return message.ContentRef{}, err
+	}
+	return message.ContentRef{Key: "sha256/" + string(bytes.Repeat([]byte{'a'}, 64)), SizeBytes: int64(len(content))}, nil
+}
+
+type appDeliveryRepositoryStub struct {
+	messages []message.StoredMessage
+	err      error
+}
+
+func (s *appDeliveryRepositoryStub) CommitDelivery(context.Context, message.Delivery) ([]message.StoredMessage, error) {
+	return s.messages, s.err
 }

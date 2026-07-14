@@ -220,6 +220,17 @@ func (s *Store) OpenContent(ref message.ContentRef) (*os.File, error) {
 	return file, nil
 }
 
+// OpenRaw opens immutable Raw MIME through the application-facing reader contract.
+func (s *Store) OpenRaw(ctx context.Context, ref message.ContentRef) (io.ReadCloser, error) {
+	if ctx == nil {
+		return nil, errors.New("content open context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.OpenContent(ref)
+}
+
 // Verify checks that stored content matches its SHA-256 key and expected size.
 func (s *Store) Verify(ctx context.Context, ref message.ContentRef) error {
 	if ref.SizeBytes < 0 {

@@ -15,19 +15,22 @@ import (
 	"mailwisp/internal/config"
 	"mailwisp/internal/contentstore"
 	"mailwisp/internal/httpapi"
+	"mailwisp/internal/jobs"
 	"mailwisp/internal/lmtp"
+	"mailwisp/internal/mail"
 	"mailwisp/internal/message"
 	"mailwisp/internal/postgres"
 )
 
 // App owns the process lifecycle and concrete service composition.
 type App struct {
-	config     config.Config
-	logger     *slog.Logger
-	http       *httpapi.Server
-	lmtp       *lmtp.Server
-	pool       *pgxpool.Pool
-	repository *postgres.DeliveryRepository
+	config       config.Config
+	logger       *slog.Logger
+	http         *httpapi.Server
+	lmtp         *lmtp.Server
+	pool         *pgxpool.Pool
+	repository   *postgres.DeliveryRepository
+	parserWorker *jobs.ParserWorker
 }
 
 type serviceResult struct {
@@ -63,6 +66,29 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create message receiver: %w", err)
 	}
+	parseRepository, err := postgres.NewContentParseRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("create content parse repository: %w", err)
+	}
+	parserLimits := mail.DefaultLimits()
+	parserLimits.MaxRawBytes = cfg.LMTP.MaxMessageBytes
+	parser, err := mail.NewParser(parserLimits)
+	if err != nil {
+		return nil, fmt.Errorf("create MIME parser: %w", err)
+	}
+	parserWorker, err := jobs.NewParserWorker(parseRepository, store, parser, logger, jobs.ParserOptions{
+		Workers:       cfg.Parser.Workers,
+		PollInterval:  cfg.Parser.PollInterval,
+		ParseTimeout:  cfg.Parser.ParseTimeout,
+		LeaseDuration: cfg.Parser.LeaseDuration,
+		MaxAttempts:   cfg.Parser.MaxAttempts,
+		RetryBase:     cfg.Parser.RetryBase,
+		RetryMax:      cfg.Parser.RetryMax,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create parser worker: %w", err)
+	}
+	lmtpReceiver := &wakingReceiver{receiver: receiver, wake: parserWorker.Notify}
 	lmtpServer, err := lmtp.NewServer(lmtp.Options{
 		Hostname:         cfg.LMTP.Hostname,
 		MaxMessageBytes:  cfg.LMTP.MaxMessageBytes,
@@ -72,7 +98,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		MaxSessions:      cfg.LMTP.MaxSessions,
 		SessionTimeout:   cfg.LMTP.SessionTimeout,
 		DeliveryTimeout:  cfg.LMTP.DeliveryTimeout,
-	}, repository, receiver, logger)
+	}, repository, lmtpReceiver, logger)
 	if err != nil {
 		return nil, fmt.Errorf("create LMTP server: %w", err)
 	}
@@ -81,12 +107,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 
 	cleanupPool = false
 	return &App{
-		config:     cfg,
-		logger:     logger,
-		http:       httpServer,
-		lmtp:       lmtpServer,
-		pool:       pool,
-		repository: repository,
+		config:       cfg,
+		logger:       logger,
+		http:         httpServer,
+		lmtp:         lmtpServer,
+		pool:         pool,
+		repository:   repository,
+		parserWorker: parserWorker,
 	}, nil
 }
 
@@ -119,12 +146,15 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 
 	serviceContext, cancelServices := context.WithCancel(ctx)
 	defer cancelServices()
-	results := make(chan serviceResult, 2)
+	results := make(chan serviceResult, 3)
 	go func() {
 		results <- serviceResult{name: "http", err: a.http.ListenAndServe()}
 	}()
 	go func() {
 		results <- serviceResult{name: "lmtp", err: a.lmtp.Serve(serviceContext, lmtpListener)}
+	}()
+	go func() {
+		results <- serviceResult{name: "parser", err: a.parserWorker.Run(serviceContext)}
 	}()
 	a.http.SetReady(true)
 
@@ -151,7 +181,7 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 		_ = a.http.Close()
 	}
 
-	for receivedResults < 2 {
+	for receivedResults < 3 {
 		select {
 		case result := <-results:
 			receivedResults++
@@ -169,6 +199,19 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 	}
 	a.logger.Info("shutdown complete")
 	return nil
+}
+
+type wakingReceiver struct {
+	receiver *message.Receiver
+	wake     func()
+}
+
+func (r *wakingReceiver) Receive(ctx context.Context, request message.ReceiveRequest) (message.Receipt, error) {
+	receipt, err := r.receiver.Receive(ctx, request)
+	if err == nil {
+		r.wake()
+	}
+	return receipt, err
 }
 
 func unexpectedServiceError(result serviceResult) error {
