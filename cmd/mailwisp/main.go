@@ -60,6 +60,16 @@ func run(arguments []string) error {
 			return fmt.Errorf("reconcile content: %w", err)
 		}
 		return nil
+	case "backup":
+		if _, err := app.CreateBackup(ctx, cfg, logger, command.path); err != nil {
+			return err
+		}
+		return nil
+	case "restore":
+		if _, err := app.RestoreBackup(ctx, cfg, logger, command.path); err != nil {
+			return err
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported role %q", command.role)
 	}
@@ -68,6 +78,7 @@ func run(arguments []string) error {
 type command struct {
 	role          string
 	repairOrphans bool
+	path          string
 }
 
 func parseCommand(arguments []string) (command, error) {
@@ -80,5 +91,8 @@ func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 2 && arguments[0] == "reconcile" && arguments[1] == "--repair-orphans" {
 		return command{role: "reconcile", repairOrphans: true}, nil
 	}
-	return command{}, errors.New("usage: mailwisp [serve|migrate|reconcile [--repair-orphans]]")
+	if len(arguments) == 2 && (arguments[0] == "backup" || arguments[0] == "restore") && arguments[1] != "" {
+		return command{role: arguments[0], path: arguments[1]}, nil
+	}
+	return command{}, errors.New("usage: mailwisp [serve|migrate|reconcile [--repair-orphans]|backup <directory>|restore <bundle-directory>]")
 }

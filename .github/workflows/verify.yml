@@ -31,6 +31,25 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install pinned PostgreSQL 18.4 client
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            --output /tmp/postgresql.asc
+          fingerprint="$(gpg --show-keys --with-colons /tmp/postgresql.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$fingerprint" = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+          sudo install -d -m 0755 /etc/apt/keyrings
+          gpg --dearmor < /tmp/postgresql.asc | sudo tee /etc/apt/keyrings/postgresql.gpg > /dev/null
+          echo 'deb [signed-by=/etc/apt/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' \
+            | sudo tee /etc/apt/sources.list.d/postgresql.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client-18=18.4-1.pgdg24.04+1
+          echo '/usr/lib/postgresql/18/bin' >> "$GITHUB_PATH"
+          export PATH="/usr/lib/postgresql/18/bin:$PATH"
+          pg_dump --version
+          pg_restore --version
+
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -57,6 +76,17 @@ jobs:
       - name: Run repository verification gate
         shell: pwsh
         run: ./scripts/verify.ps1
+
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            spikes/frontend/playwright-report
+            spikes/frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   windows-native:
     name: Windows native Go verification
