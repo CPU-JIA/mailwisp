@@ -35,3 +35,4 @@ spikes/frontend/playwright-report/
 .DS_Store
 Thumbs.db
 *.swp
+.ace-tool/

@@ -42,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
+	if cfg.Cleanup.BatchSize != 100 {
+		t.Fatalf("Cleanup defaults = %+v", cfg.Cleanup)
+	}
 }
 
 func TestLoadRejectsInvalidLimits(t *testing.T) {
@@ -127,6 +130,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_DEFAULT_TTL",
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
+		"CLEANUP_BATCH_SIZE",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",
 		"LMTP_MAX_MESSAGE_BYTES",

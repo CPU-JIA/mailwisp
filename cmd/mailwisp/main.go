@@ -70,6 +70,11 @@ func run(arguments []string) error {
 			return err
 		}
 		return nil
+	case "cleanup":
+		if _, err := app.CleanupExpired(ctx, cfg, logger); err != nil {
+			return fmt.Errorf("cleanup expired Inboxes: %w", err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported role %q", command.role)
 	}
@@ -85,7 +90,7 @@ func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 0 {
 		return command{role: "serve"}, nil
 	}
-	if len(arguments) == 1 && (arguments[0] == "serve" || arguments[0] == "migrate" || arguments[0] == "reconcile") {
+	if len(arguments) == 1 && (arguments[0] == "serve" || arguments[0] == "migrate" || arguments[0] == "reconcile" || arguments[0] == "cleanup") {
 		return command{role: arguments[0]}, nil
 	}
 	if len(arguments) == 2 && arguments[0] == "reconcile" && arguments[1] == "--repair-orphans" {
@@ -94,5 +99,5 @@ func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 2 && (arguments[0] == "backup" || arguments[0] == "restore") && arguments[1] != "" {
 		return command{role: arguments[0], path: arguments[1]}, nil
 	}
-	return command{}, errors.New("usage: mailwisp [serve|migrate|reconcile [--repair-orphans]|backup <directory>|restore <bundle-directory>]")
+	return command{}, errors.New("usage: mailwisp [serve|migrate|cleanup|reconcile [--repair-orphans]|backup <directory>|restore <bundle-directory>]")
 }
