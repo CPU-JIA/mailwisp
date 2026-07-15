@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -445,12 +446,7 @@ func browserSessionKeyFromEnvironment() ([]byte, error) {
 	if keyFile == "" {
 		return decodeSecretKey("BROWSER_SESSION_KEY")
 	}
-	file, err := os.Open(keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("MAILWISP_BROWSER_SESSION_KEY_FILE: %w", err)
-	}
-	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, 4097))
+	raw, err := readConfiguredFile(keyFile, 4096)
 	if err != nil {
 		return nil, fmt.Errorf("read MAILWISP_BROWSER_SESSION_KEY_FILE: %w", err)
 	}
@@ -485,12 +481,7 @@ func postgresDSNWithPasswordFile(dsn, passwordFile string) (string, error) {
 	if passwordFile == "" {
 		return dsn, nil
 	}
-	file, err := os.Open(passwordFile)
-	if err != nil {
-		return "", fmt.Errorf("MAILWISP_POSTGRES_PASSWORD_FILE: %w", err)
-	}
-	defer file.Close()
-	passwordBytes, err := io.ReadAll(io.LimitReader(file, 4097))
+	passwordBytes, err := readConfiguredFile(passwordFile, 4096)
 	if err != nil {
 		return "", fmt.Errorf("read MAILWISP_POSTGRES_PASSWORD_FILE: %w", err)
 	}
@@ -504,4 +495,22 @@ func postgresDSNWithPasswordFile(dsn, passwordFile string) (string, error) {
 	}
 	parsed.User = url.UserPassword(parsed.User.Username(), password)
 	return parsed.String(), nil
+}
+
+func readConfiguredFile(path string, maxBytes int64) ([]byte, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(filepath.Dir(absolute))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := root.Open(filepath.Base(absolute))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, maxBytes+1))
 }
