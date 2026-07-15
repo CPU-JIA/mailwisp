@@ -129,6 +129,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	httpServer := httpapi.NewServer(cfg.HTTP, logger)
 	httpServer.SetReadinessChecker(repository)
 	httpServer.SetMailboxService(mailboxService, capabilityService)
+	if len(cfg.BrowserSession.Key) != 0 {
+		browserSessions, err := auth.NewBrowserSessionManager(cfg.BrowserSession.Key, cfg.BrowserSession.Lifetime)
+		if err != nil {
+			return nil, fmt.Errorf("create browser session manager: %w", err)
+		}
+		httpServer.SetBrowserSessions(browserSessions, cfg.BrowserSession.Secure)
+	}
 	if cfg.Compatibility.DuckMailEnabled {
 		duckMailRepository, err := postgres.NewDuckMailRepository(pool)
 		if err != nil {

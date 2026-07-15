@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +101,62 @@ func TestCanonicalInboxAPIRequiresCapabilityAndReturnsRequestID(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionExchangeRequiresCSRFForMutation(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, logger)
+	server.SetMailboxService(&mailboxAPIStub{}, &authStub{})
+	manager, err := auth.NewBrowserSessionManager([]byte(strings.Repeat("k", 32)), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetBrowserSessions(manager, false)
+
+	exchange := httptest.NewRequest(http.MethodPost, "/api/v1/session", nil)
+	exchange.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, exchange)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("exchange status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var sessionCookie, csrfCookie *http.Cookie
+	for _, cookie := range recorder.Result().Cookies() {
+		switch cookie.Name {
+		case "mailwisp_session":
+			sessionCookie = cookie
+		case "mailwisp_csrf":
+			csrfCookie = cookie
+		}
+	}
+	if sessionCookie == nil || !sessionCookie.HttpOnly || csrfCookie == nil || csrfCookie.HttpOnly {
+		t.Fatalf("session cookies = %+v / %+v", sessionCookie, csrfCookie)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/session", nil)
+	get.AddCookie(sessionCookie)
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, get)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("session GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	deleteWithoutCSRF := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
+	deleteWithoutCSRF.AddCookie(sessionCookie)
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, deleteWithoutCSRF)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF status = %d", recorder.Code)
+	}
+
+	deleteWithCSRF := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
+	deleteWithCSRF.AddCookie(sessionCookie)
+	deleteWithCSRF.Header.Set("X-MailWisp-CSRF", csrfCookie.Value)
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, deleteWithCSRF)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("session DELETE status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 type readinessStub struct {
 	err error
 }
@@ -107,7 +164,8 @@ type readinessStub struct {
 type authStub struct{}
 
 func (*authStub) Authenticate(context.Context, string, ...auth.Scope) (auth.Principal, error) {
-	return auth.Principal{InboxID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12")}, nil
+	scopes, _ := auth.NewScopeSet(auth.ScopeInboxRead, auth.ScopeInboxDelete, auth.ScopeMessageRead, auth.ScopeMessageDelete)
+	return auth.Principal{InboxID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Scopes: scopes, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
 type mailboxAPIStub struct{}

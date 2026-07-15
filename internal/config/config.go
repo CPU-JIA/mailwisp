@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,7 @@ type Config struct {
 	Content         Content
 	Inbox           Inbox
 	Compatibility   Compatibility
+	BrowserSession  BrowserSession
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 }
@@ -51,6 +53,13 @@ type Inbox struct {
 // Compatibility enables isolated third-party HTTP adapters.
 type Compatibility struct {
 	DuckMailEnabled bool
+}
+
+// BrowserSession contains optional same-origin Cookie authentication settings.
+type BrowserSession struct {
+	Key      []byte
+	Lifetime time.Duration
+	Secure   bool
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -98,6 +107,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	duckMailEnabled, err := parseBoolean("DUCKMAIL_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	browserSessionSecure, err := parseBoolean("BROWSER_SESSION_SECURE", true)
+	if err != nil {
+		return Config{}, err
+	}
+	browserSessionKey, err := decodeSecretKey("BROWSER_SESSION_KEY")
 	if err != nil {
 		return Config{}, err
 	}
@@ -152,6 +169,11 @@ func Load() (Config, error) {
 		},
 		Compatibility: Compatibility{
 			DuckMailEnabled: duckMailEnabled,
+		},
+		BrowserSession: BrowserSession{
+			Key:      browserSessionKey,
+			Lifetime: duration("BROWSER_SESSION_LIFETIME", 12*time.Hour),
+			Secure:   browserSessionSecure,
 		},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
@@ -281,6 +303,12 @@ func (c Config) Validate() error {
 	if c.Inbox.DefaultTTL <= 0 || c.Inbox.MaxTTL <= 0 || c.Inbox.DefaultTTL > c.Inbox.MaxTTL {
 		errs = append(errs, errors.New("MAILWISP_INBOX_DEFAULT_TTL and MAILWISP_INBOX_MAX_TTL must define a positive ordered range"))
 	}
+	if len(c.BrowserSession.Key) != 0 && len(c.BrowserSession.Key) != 32 {
+		errs = append(errs, errors.New("MAILWISP_BROWSER_SESSION_KEY must decode to exactly 32 bytes"))
+	}
+	if c.BrowserSession.Lifetime <= 0 || c.BrowserSession.Lifetime > 7*24*time.Hour {
+		errs = append(errs, errors.New("MAILWISP_BROWSER_SESSION_LIFETIME must be between 1ns and 168h"))
+	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("MAILWISP_SHUTDOWN_TIMEOUT must be positive"))
 	}
@@ -367,6 +395,23 @@ func parseBoolean(name string, fallback bool) (bool, error) {
 		return false, fmt.Errorf("MAILWISP_%s: %w", name, err)
 	}
 	return parsed, nil
+}
+
+func decodeSecretKey(name string) ([]byte, error) {
+	raw := strings.TrimSpace(os.Getenv(prefix + name))
+	if raw == "" {
+		return nil, nil
+	}
+	for _, encoding := range []*base64.Encoding{base64.RawURLEncoding.Strict(), base64.StdEncoding.Strict()} {
+		decoded, err := encoding.DecodeString(raw)
+		if err == nil {
+			if len(decoded) != 32 {
+				return nil, fmt.Errorf("MAILWISP_%s must decode to exactly 32 bytes", name)
+			}
+			return decoded, nil
+		}
+	}
+	return nil, fmt.Errorf("MAILWISP_%s must be base64 or base64url", name)
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {

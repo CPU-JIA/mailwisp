@@ -42,6 +42,9 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
+	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour || !cfg.BrowserSession.Secure {
+		t.Fatalf("BrowserSession defaults = %+v", cfg.BrowserSession)
+	}
 }
 
 func TestLoadRejectsInvalidLimits(t *testing.T) {
@@ -68,6 +71,16 @@ func TestLoadRejectsInvalidCompatibilityBoolean(t *testing.T) {
 	t.Setenv(prefix+"DUCKMAIL_ENABLED", "sometimes")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want compatibility boolean parsing error")
+	}
+}
+
+func TestLoadBrowserSessionKey(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"BROWSER_SESSION_KEY", "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s")
+	cfg, err := Load()
+	if err != nil || len(cfg.BrowserSession.Key) != 32 {
+		t.Fatalf("Load() key length = %d, error = %v", len(cfg.BrowserSession.Key), err)
 	}
 }
 
@@ -127,6 +140,9 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_DEFAULT_TTL",
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
+		"BROWSER_SESSION_KEY",
+		"BROWSER_SESSION_LIFETIME",
+		"BROWSER_SESSION_SECURE",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",
 		"LMTP_MAX_MESSAGE_BYTES",

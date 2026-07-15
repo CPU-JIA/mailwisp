@@ -23,4 +23,15 @@ describe('MailWispClient', () => {
       code: 'unauthenticated', status: 401, requestID: 'request-1',
     })
   })
+
+  it('uses Cookie session CSRF for mutations without exposing a capability', async () => {
+    document.cookie = 'mailwisp_csrf=csrf-proof; path=/'
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const client = new MailWispClient('https://mail.example')
+    await client.deleteInbox('')
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(url).toBe('https://mail.example/api/v1/inboxes/me')
+    expect(init?.headers).toMatchObject({ 'X-MailWisp-CSRF': 'csrf-proof' })
+    expect(init?.headers).not.toHaveProperty('Authorization')
+  })
 })

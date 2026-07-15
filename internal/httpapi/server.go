@@ -53,6 +53,8 @@ type Server struct {
 	readinessTimeout time.Duration
 	mailbox          MailboxService
 	authenticator    CapabilityAuthenticator
+	browserSessions  *auth.BrowserSessionManager
+	secureCookies    bool
 	limiter          *createLimiter
 	trustedProxies   []*net.IPNet
 	duckMail         *duckmail.Service
@@ -81,6 +83,9 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /readyz", server.handleReady)
 	mux.HandleFunc("GET /health", server.handleReady)
 	mux.HandleFunc("POST /api/v1/inboxes", server.handleCreateInbox)
+	mux.HandleFunc("POST /api/v1/session", server.handleCreateSession)
+	mux.HandleFunc("GET /api/v1/session", server.handleGetSession)
+	mux.HandleFunc("DELETE /api/v1/session", server.handleDeleteSession)
 	mux.HandleFunc("GET /api/v1/inboxes/me", server.handleGetInbox)
 	mux.HandleFunc("DELETE /api/v1/inboxes/me", server.handleDeleteInbox)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages", server.handleListMessages)
@@ -116,6 +121,12 @@ func (s *Server) SetReadinessChecker(checker ReadinessChecker) { s.readiness = c
 func (s *Server) SetMailboxService(service MailboxService, authenticator CapabilityAuthenticator) {
 	s.mailbox = service
 	s.authenticator = authenticator
+}
+
+// SetBrowserSessions enables same-origin HttpOnly Cookie authentication.
+func (s *Server) SetBrowserSessions(manager *auth.BrowserSessionManager, secureCookies bool) {
+	s.browserSessions = manager
+	s.secureCookies = secureCookies
 }
 
 // SetDuckMailService enables the isolated DuckMail compatibility namespace.
@@ -217,6 +228,51 @@ func (s *Server) handleGetInbox(w http.ResponseWriter, request *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": inbox})
 }
 
+func (s *Server) handleCreateSession(w http.ResponseWriter, request *http.Request) {
+	if s.mailbox == nil || s.authenticator == nil || s.browserSessions == nil {
+		writeError(w, request, http.StatusNotImplemented, "not_configured", "browser sessions are not configured")
+		return
+	}
+	principal, err := s.authenticateBearer(request)
+	if err != nil {
+		writeMappedError(w, request, err)
+		return
+	}
+	session, err := s.browserSessions.Issue(request.Context(), principal)
+	if err != nil {
+		writeMappedError(w, request, err)
+		return
+	}
+	inbox, err := s.mailbox.Get(request.Context(), principal.InboxID)
+	if err != nil {
+		writeMappedError(w, request, err)
+		return
+	}
+	s.setSessionCookies(w, session)
+	writeJSON(w, http.StatusCreated, map[string]any{"data": map[string]any{"inbox": inbox, "expires_at": session.ExpiresAt}})
+}
+
+func (s *Server) handleGetSession(w http.ResponseWriter, request *http.Request) {
+	principal, ok := s.requireBrowserPrincipal(w, request, false, auth.ScopeInboxRead)
+	if !ok {
+		return
+	}
+	inbox, err := s.mailbox.Get(request.Context(), principal.InboxID)
+	if err != nil {
+		writeMappedError(w, request, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"inbox": inbox, "expires_at": principal.ExpiresAt}})
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, request *http.Request) {
+	if _, ok := s.requireBrowserPrincipal(w, request, true, auth.ScopeInboxRead); !ok {
+		return
+	}
+	s.clearSessionCookies(w)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleDeleteInbox(w http.ResponseWriter, request *http.Request) {
 	principal, ok := s.requirePrincipal(w, request, auth.ScopeInboxDelete)
 	if !ok {
@@ -226,6 +282,7 @@ func (s *Server) handleDeleteInbox(w http.ResponseWriter, request *http.Request)
 		writeMappedError(w, request, err)
 		return
 	}
+	s.clearSessionCookies(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -291,19 +348,80 @@ func (s *Server) requirePrincipal(w http.ResponseWriter, request *http.Request, 
 		writeError(w, request, http.StatusNotImplemented, "not_configured", "Inbox API is not configured")
 		return auth.Principal{}, false
 	}
+	if strings.TrimSpace(request.Header.Get("Authorization")) != "" {
+		principal, err := s.authenticateBearer(request, scopes...)
+		if err != nil {
+			writeMappedError(w, request, err)
+			return auth.Principal{}, false
+		}
+		return principal, true
+	}
+	principal, ok := s.requireBrowserPrincipal(w, request, request.Method != http.MethodGet && request.Method != http.MethodHead && request.Method != http.MethodOptions, scopes...)
+	return principal, ok
+}
+
+func (s *Server) authenticateBearer(request *http.Request, scopes ...auth.Scope) (auth.Principal, error) {
 	header := request.Header.Get("Authorization")
 	scheme, plaintext, found := strings.Cut(header, " ")
 	plaintext = strings.TrimSpace(plaintext)
 	if !found || !strings.EqualFold(scheme, "Bearer") || plaintext == "" {
-		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability is required")
+		return auth.Principal{}, auth.ErrUnauthenticated
+	}
+	return s.authenticator.Authenticate(request.Context(), plaintext, scopes...)
+}
+
+func (s *Server) requireBrowserPrincipal(w http.ResponseWriter, request *http.Request, requireCSRF bool, scopes ...auth.Scope) (auth.Principal, bool) {
+	if s.mailbox == nil || s.browserSessions == nil {
+		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability or browser session is required")
 		return auth.Principal{}, false
 	}
-	principal, err := s.authenticator.Authenticate(request.Context(), plaintext, scopes...)
+	cookie, err := request.Cookie(s.sessionCookieName())
+	if err != nil || cookie.Value == "" {
+		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability or browser session is required")
+		return auth.Principal{}, false
+	}
+	csrf := request.Header.Get("X-MailWisp-CSRF")
+	principal, err := s.browserSessions.Authenticate(request.Context(), cookie.Value, csrf, requireCSRF, scopes...)
 	if err != nil {
 		writeMappedError(w, request, err)
 		return auth.Principal{}, false
 	}
 	return principal, true
+}
+
+func (s *Server) setSessionCookies(w http.ResponseWriter, session auth.BrowserSession) {
+	maxAge := max(1, int(time.Until(session.ExpiresAt).Seconds()))
+	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: session.CookieValue, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: s.secureCookies, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: s.csrfCookieName(), Value: session.CSRFToken, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: s.secureCookies, HttpOnly: false, SameSite: http.SameSiteLaxMode})
+}
+
+func (s *Server) clearSessionCookies(w http.ResponseWriter) {
+	for _, cookie := range []*http.Cookie{
+		{Name: s.sessionCookieName(), HttpOnly: true},
+		{Name: s.csrfCookieName()},
+	} {
+		cookie.Value = ""
+		cookie.Path = "/"
+		cookie.MaxAge = -1
+		cookie.Expires = time.Unix(1, 0)
+		cookie.Secure = s.secureCookies
+		cookie.SameSite = http.SameSiteLaxMode
+		http.SetCookie(w, cookie)
+	}
+}
+
+func (s *Server) sessionCookieName() string {
+	if s.secureCookies {
+		return "__Host-mailwisp_session"
+	}
+	return "mailwisp_session"
+}
+
+func (s *Server) csrfCookieName() string {
+	if s.secureCookies {
+		return "__Host-mailwisp_csrf"
+	}
+	return "mailwisp_csrf"
 }
 
 func parseMessageID(raw string) (message.MessageID, error) {
@@ -337,6 +455,10 @@ func writeMappedError(w http.ResponseWriter, request *http.Request, err error) {
 		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability is invalid or expired")
 	case errors.Is(err, auth.ErrForbidden):
 		writeError(w, request, http.StatusForbidden, "forbidden", "the capability scope does not allow this action")
+	case errors.Is(err, auth.ErrCSRF):
+		writeError(w, request, http.StatusForbidden, "csrf_failed", "the browser CSRF proof is missing or invalid")
+	case errors.Is(err, auth.ErrBrowserSessionDisabled):
+		writeError(w, request, http.StatusNotImplemented, "not_configured", "browser sessions are not configured")
 	case errors.Is(err, mailbox.ErrInboxNotFound), errors.Is(err, mailbox.ErrMessageNotFound):
 		writeError(w, request, http.StatusNotFound, "not_found", "the requested resource was not found")
 	case errors.Is(err, mailbox.ErrInvalidDomain), errors.Is(err, mailbox.ErrInvalidLifetime):

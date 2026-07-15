@@ -18,7 +18,7 @@ export const messages = {
       tokenPlaceholder: 'wisp_cap_v1_…',
       open: '打开收件箱',
       opening: '正在验证令牌…',
-      privacy: '访问令牌只保留在当前页面内存中，刷新页面后需要重新输入。',
+      privacy: '访问令牌只用于建立HttpOnly安全会话，不写入本地存储；服务器未启用会话时才仅保留在页面内存中。',
     },
     issued: {
       eyebrow: '邮箱已经就绪',
@@ -62,6 +62,7 @@ export const messages = {
       retry: '重新尝试',
       network_error: '无法连接 MailWisp。请检查网络或稍后再试。',
       unauthenticated: '访问令牌已失效、过期或输入有误。请重新输入。',
+      csrf_failed: '安全会话校验失败。请重新打开邮箱后再试。',
       rate_limited: '创建得太快了。请稍等片刻再试。',
       invalid_request: '创建参数不符合服务器限制。请使用默认设置重试。',
       not_found: '邮箱或邮件已经不存在。',
@@ -85,7 +86,7 @@ export const messages = {
       tokenPlaceholder: 'wisp_cap_v1_…',
       open: 'Open inbox',
       opening: 'Verifying token…',
-      privacy: 'The access token stays only in this page’s memory. You will need to enter it again after a refresh.',
+      privacy: 'The access token is exchanged for an HttpOnly session and never written to local storage. It remains in page memory only when sessions are disabled.',
     },
     issued: {
       eyebrow: 'Your inbox is ready',
@@ -110,7 +111,7 @@ export const messages = {
     },
     error: {
       title: 'This wisp did not arrive', retry: 'Try again', network_error: 'MailWisp could not be reached. Check your connection and try again.',
-      unauthenticated: 'The access token is invalid or expired. Enter it again.', rate_limited: 'Too many inboxes were created. Wait a moment and try again.',
+      unauthenticated: 'The access token is invalid or expired. Enter it again.', csrf_failed: 'The secure session check failed. Reopen the inbox and try again.', rate_limited: 'Too many inboxes were created. Wait a moment and try again.',
       invalid_request: 'The server rejected these settings. Retry with the defaults.', not_found: 'The inbox or message no longer exists.',
       internal_error: 'The server could not complete the request. Try again shortly.', generic: 'The request did not complete. Try again shortly.', requestID: 'Request ID: {id}',
     },

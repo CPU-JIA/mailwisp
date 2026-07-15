@@ -1,4 +1,4 @@
-import type { CreatedInbox, ErrorEnvelope, Inbox, MessageDetail, MessageSummary } from './types'
+import type { BrowserSession, CreatedInbox, ErrorEnvelope, Inbox, MessageDetail, MessageSummary } from './types'
 
 export class APIError extends Error {
   readonly code: string
@@ -33,11 +33,27 @@ export class MailWispClient {
     })
   }
 
-  getInbox(token: string, signal?: AbortSignal): Promise<Inbox> {
+  exchangeSession(token: string, signal?: AbortSignal): Promise<BrowserSession> {
+    return this.#request<BrowserSession>('/api/v1/session', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    })
+  }
+
+  getSession(signal?: AbortSignal): Promise<BrowserSession> {
+    return this.#request<BrowserSession>('/api/v1/session', { signal })
+  }
+
+  async deleteSession(signal?: AbortSignal): Promise<void> {
+    await this.#request<void>('/api/v1/session', { method: 'DELETE', headers: this.#csrfHeaders(), signal })
+  }
+
+  getInbox(token = '', signal?: AbortSignal): Promise<Inbox> {
     return this.#request<Inbox>('/api/v1/inboxes/me', this.#authenticated(token, signal))
   }
 
-  listMessages(token: string, limit = 100, signal?: AbortSignal): Promise<MessageSummary[]> {
+  listMessages(token = '', limit = 100, signal?: AbortSignal): Promise<MessageSummary[]> {
     return this.#request<MessageSummary[]>(`/api/v1/inboxes/me/messages?limit=${limit}`, this.#authenticated(token, signal))
   }
 
@@ -49,15 +65,31 @@ export class MailWispClient {
     await this.#request<void>(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}`, {
       ...this.#authenticated(token, signal),
       method: 'DELETE',
+      headers: { ...this.#headers(token), ...this.#csrfHeaders(token) },
     })
   }
 
   async deleteInbox(token: string, signal?: AbortSignal): Promise<void> {
-    await this.#request<void>('/api/v1/inboxes/me', { ...this.#authenticated(token, signal), method: 'DELETE' })
+    await this.#request<void>('/api/v1/inboxes/me', {
+      ...this.#authenticated(token, signal),
+      method: 'DELETE',
+      headers: { ...this.#headers(token), ...this.#csrfHeaders(token) },
+    })
   }
 
   #authenticated(token: string, signal?: AbortSignal): RequestInit {
-    return { headers: { Authorization: `Bearer ${token}` }, signal }
+    return { headers: this.#headers(token), signal }
+  }
+
+  #headers(token: string): Record<string, string> {
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
+
+  #csrfHeaders(token = ''): Record<string, string> {
+    if (token) return {}
+    const csrf = document.cookie.split(';').map((value) => value.trim()).find((value) => value.startsWith('__Host-mailwisp_csrf=') || value.startsWith('mailwisp_csrf='))
+    const separator = csrf?.indexOf('=') ?? -1
+    return separator >= 0 ? { 'X-MailWisp-CSRF': decodeURIComponent(csrf!.slice(separator + 1)) } : {}
   }
 
   async #request<T>(path: string, init: RequestInit): Promise<T> {

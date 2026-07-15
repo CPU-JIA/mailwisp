@@ -20,7 +20,7 @@
 
 Vue运行时比原生和Svelte更大，但当前首个构建的核心脚本Gzip仍处于个人服务器可接受范围，换取成熟的组合式状态、i18n和测试生态。没有证据证明Runtime成为P95瓶颈前，不切换框架。
 
-## 未覆盖
+## 后续边界
 
-- 当前Canonical API仍使用Bearer Capability；HttpOnly Browser Session需要独立ADR与CSRF验证后再接入。
+- HttpOnly Browser Session与CSRF已由ADR 0012接入；Capability仍作为CLI、自动化与Session交换凭证。
 - 邮件附件下载API、内嵌图片CID解析和真实SMTP到浏览器E2E需要PostgreSQL/Linux环境完成Integration验证。
