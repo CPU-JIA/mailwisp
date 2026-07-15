@@ -42,6 +42,19 @@ func TestBackupToolBundleRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Receive(source) error = %v", err)
 	}
+	compatibilityRepository, err := NewCloudflareTempRepository(sourcePool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatibilityInboxID, err := compatibilityRepository.EnsureInboxID(context.Background(), inboxID)
+	if err != nil {
+		t.Fatalf("EnsureInboxID(source) error = %v", err)
+	}
+	compatibilityMessageIDs, err := compatibilityRepository.EnsureMessageIDs(context.Background(), inboxID, []message.MessageID{receipt.Messages[0].ID})
+	if err != nil {
+		t.Fatalf("EnsureMessageIDs(source) error = %v", err)
+	}
+	compatibilityMessageID := compatibilityMessageIDs[receipt.Messages[0].ID]
 
 	sourceTool, err := NewBackupTool(integrationDataSourceName, sourcePool)
 	if err != nil {
@@ -75,6 +88,18 @@ func TestBackupToolBundleRoundTrip(t *testing.T) {
 		t.Fatalf("restored manifest = %+v, want %+v", restored, created)
 	}
 	assertCounts(t, restorePool, 1, 1)
+	restoredCompatibilityRepository, err := NewCloudflareTempRepository(restorePool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredInboxID, err := restoredCompatibilityRepository.EnsureInboxID(context.Background(), inboxID)
+	if err != nil || restoredInboxID != compatibilityInboxID {
+		t.Fatalf("EnsureInboxID(restored) = %d, error = %v", restoredInboxID, err)
+	}
+	restoredMessageIDs, err := restoredCompatibilityRepository.EnsureMessageIDs(context.Background(), inboxID, []message.MessageID{receipt.Messages[0].ID})
+	if err != nil || restoredMessageIDs[receipt.Messages[0].ID] != compatibilityMessageID {
+		t.Fatalf("EnsureMessageIDs(restored) = %+v, error = %v", restoredMessageIDs, err)
+	}
 
 	restoredStore, err := contentstore.Open(restoredContentRoot, contentstore.Options{MaxBytes: 1 << 20})
 	if err != nil {

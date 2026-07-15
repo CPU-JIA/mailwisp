@@ -1,0 +1,67 @@
+{
+  "source": "https://github.com/dreamhunter2333/cloudflare_temp_email",
+  "source_commit": "99b332345bcf3beff77ed70feaec9d5e10de3590",
+  "source_version": "v1.10.0",
+  "verified_at": "2026-07-15",
+  "source_files": [
+    {
+      "path": "worker/src/worker.ts",
+      "sha256": "385dcdf7ea4e1da130726220c06a9952691f480744972f2a50c5a8e371461ee9"
+    },
+    {
+      "path": "worker/src/commom_api.ts",
+      "sha256": "c14af6952167925139ad0a7cd41f202716c3fa7af158cb4482a6c771b6895e69"
+    },
+    {
+      "path": "worker/src/mails_api/index.ts",
+      "sha256": "31ef29fdd1fcc712f9b517512edb3dc82f6f7062c4ecb5ed4f25e88041b17531"
+    },
+    {
+      "path": "worker/src/mails_api/new_address.ts",
+      "sha256": "806576eb038fd01039b205444ca98a2da5a41e4076b03881cb398a1f741306af"
+    },
+    {
+      "path": "worker/src/mails_api/mails_crud.ts",
+      "sha256": "e92b446e6f19e198fc9cbceded702d9a657053c8747a5604c972cedd8121f8d0"
+    },
+    {
+      "path": "worker/src/mails_api/parsed_mail_api.ts",
+      "sha256": "7c7af300f298bbcf82b8d49aacea9e3611de289d961e310f69fa45f382cbcd38"
+    },
+    {
+      "path": "worker/src/user_api/index.ts",
+      "sha256": "eb551b0174ec9bb654e5d81427fb7b23bc2664de73a94d904d680dd30a5a6d9b"
+    },
+    {
+      "path": "worker/src/user_api/settings.ts",
+      "sha256": "669b5aaf43e74ac48f8afb173005cde1b506b9ccc8552e4439c6a8f0a650fcda"
+    },
+    {
+      "path": "frontend/src/api/index.js",
+      "sha256": "bf834cb06a33b0b8978b85ba003ce3057b43e51d8fa0d64b9bd2099b0726c0f7"
+    },
+    {
+      "path": "frontend/src/views/Index.vue",
+      "sha256": "e6f8fd10a144ae17b11d80449224218b7f88afda806451afd34b2f162fda858a"
+    }
+  ],
+  "mailwisp_namespace": "/compat/cloudflare-temp",
+  "authentication_projection": "canonical_opaque_capability_in_jwt_field",
+  "legacy_paths_default": false,
+  "endpoints": [
+    "GET /open_api/settings",
+    "GET /user_api/open_settings",
+    "POST /api/new_address",
+    "GET /api/settings",
+    "GET /api/mails",
+    "GET /api/mail/{id}",
+    "GET /api/parsed_mails",
+    "GET /api/parsed_mail/{id}",
+    "DELETE /api/mails/{id}",
+    "DELETE /api/delete_address"
+  ],
+  "limits": {
+    "page_items": 20,
+    "response_payload_bytes": 33554432
+  }
+}
