@@ -46,7 +46,17 @@ type Store struct {
 	objectsRoot string
 	stagingRoot string
 	maxBytes    int64
+	// putObserver is an unexported deterministic crash-test seam. Production
+	// composition never assigns it.
+	putObserver func(putStage)
 }
+
+type putStage string
+
+const (
+	putStageFileSynced   putStage = "file-synced"
+	putStageObjectLinked putStage = "object-linked"
+)
 
 // Open creates or opens a local content store.
 func Open(root string, options Options) (*Store, error) {
@@ -133,6 +143,7 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 		_ = staging.Close()
 		return message.ContentRef{}, fmt.Errorf("sync staging content: %w", err)
 	}
+	s.observePut(putStageFileSynced)
 	if err := staging.Close(); err != nil {
 		return message.ContentRef{}, fmt.Errorf("close staging content: %w", err)
 	}
@@ -154,6 +165,7 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 	linkErr := os.Link(stagingPath, destination)
 	switch {
 	case linkErr == nil:
+		s.observePut(putStageObjectLinked)
 		if err := syncDirectory(destinationDirectory); err != nil {
 			keepStaging = true
 			return message.ContentRef{}, fmt.Errorf("sync installed object directory: %w", err)
@@ -182,6 +194,12 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 	}
 
 	return ref, nil
+}
+
+func (s *Store) observePut(stage putStage) {
+	if s.putObserver != nil {
+		s.putObserver(stage)
+	}
 }
 
 // OpenContent opens immutable content for reading after validating its reference.

@@ -12,7 +12,7 @@ LMTP只有在邮件已经可靠持久化后才能返回成功。将无上限Raw 
 Reference Profile采用PostgreSQL元数据加本地内容寻址文件存储：
 
 1. LMTP将Raw Source流式写入有大小上限的Staging文件。
-2. 计算Content Hash，`fsync`文件并在同一文件系统原子Rename到Content Path。
+2. 计算Content Hash，`fsync`文件并在同一文件系统原子Hard Link到Content Path，再删除Staging Link。
 3. PostgreSQL Transaction创建Message、Recipient与Content Reference。
 4. Transaction提交后才向Postfix返回成功。
 5. Parser Worker异步生成Header、Text、Sanitized HTML与Attachment Metadata。
@@ -67,10 +67,14 @@ Content Hash用于物理去重，但每次SMTP投递仍创建独立Message Recor
 - `serve`持有独立PostgreSQL Session的共享维护锁；`reconcile`必须取得独占锁，避免“文件已落盘、数据库尚未提交”的重复投递窗口被误删。
 - Orphan支持显式`--repair-orphans`修复；Missing与Corrupt只报告并以非零状态退出，不自动删除业务记录。
 - 普通与Race Integration已覆盖Content Catalog分页、维护锁互斥和Orphan修复。
+- 真实子进程在Raw写入中、文件`fsync`后与Object Hard Link后被强制终止；重启后分别证明Staging可裁剪、未产生半Object，或Object可作为Orphan安全修复。
+- 固定Linux/amd64环境中，Content Store强杀恢复普通测试10轮与Race测试3轮通过。
+- PostgreSQL Transaction在Commit前被强制终止后自动回滚，数据库保持0 Content/0 Message，已落盘Object由Reconciliation清理。
+- PostgreSQL Commit成功后、外部确认前被强制终止时，数据库与Object保持一致；模拟重投后复用1份Content并形成2条Message，保留重复投递语义。
 
 仍未完成，因此ADR保持“提议中”：
 
-- Linux进程在Write、Fsync、Link和DB Commit各阶段被强制终止后的恢复测试。
+- 真实Linux生产文件系统或VM在断电/硬重启下的目录与文件持久性演练；进程强杀不能替代掉电证明。
 - 真实Postfix队列重投与应用重启验证。
 - 数据库与Content Store一致性备份和恢复演练。
 - Linux生产文件系统上的容量、目录数量与尾延迟Benchmark。

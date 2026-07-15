@@ -21,7 +21,17 @@ var (
 // DeliveryRepository atomically writes content metadata and recipient message rows.
 type DeliveryRepository struct {
 	pool *pgxpool.Pool
+	// commitObserver is an unexported deterministic crash-test seam.
+	// Production composition never assigns it.
+	commitObserver func(deliveryCommitStage)
 }
+
+type deliveryCommitStage string
+
+const (
+	deliveryCommitStageBefore deliveryCommitStage = "before-commit"
+	deliveryCommitStageAfter  deliveryCommitStage = "after-commit"
+)
 
 // NewDeliveryRepository constructs a PostgreSQL delivery repository.
 func NewDeliveryRepository(pool *pgxpool.Pool) (*DeliveryRepository, error) {
@@ -120,10 +130,18 @@ func (r *DeliveryRepository) CommitDelivery(ctx context.Context, delivery messag
 		})
 	}
 
+	r.observeCommit(deliveryCommitStageBefore)
 	if err := transaction.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit delivery transaction: %w", err)
 	}
+	r.observeCommit(deliveryCommitStageAfter)
 	return stored, nil
+}
+
+func (r *DeliveryRepository) observeCommit(stage deliveryCommitStage) {
+	if r.commitObserver != nil {
+		r.commitObserver(stage)
+	}
 }
 
 func mapDeliveryError(err error) error {
