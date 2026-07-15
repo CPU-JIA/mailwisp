@@ -12,6 +12,7 @@ func TestReferenceProfileSecurityContract(t *testing.T) {
 		required []string
 	}{
 		{"versions.lock", []string{"MAILWISP_GO=1.26.5", "MAILWISP_POSTGRESQL=18.4", "MAILWISP_POSTFIX=3.11.5", "MAILWISP_NGINX=1.30.3", "MAILWISP_CERTBOT=5.6.0"}},
+		{"README.md", []string{"MAILWISP_BROWSER_SESSION_KEY=<base64-encoded-32-byte-secret>", "openssl rand -base64 32", "Secure `__Host-` Cookie"}},
 		{"systemd/mailwisp.service", []string{"NoNewPrivileges=true", "ProtectSystem=strict", "MemoryDenyWriteExecute=true", "ReadWritePaths=/var/lib/mailwisp", "Restart=on-failure"}},
 		{"systemd/mailwisp-cleanup.timer", []string{"OnUnitActiveSec=5min", "RandomizedDelaySec=30s", "Persistent=true"}},
 		{"nginx/mailwisp.conf.example", []string{"ssl_protocols TLSv1.2 TLSv1.3", "Content-Security-Policy", "proxy_pass http://127.0.0.1:8080", "limit_req zone=mailwisp_create"}},

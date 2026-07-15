@@ -13,6 +13,7 @@ export interface ViewError {
 export function useMailbox(client = new MailWispClient()) {
   const phase = ref<Phase>('welcome')
   const token = ref('')
+	const sessionActive = ref(false)
   const inbox = ref<Inbox | null>(null)
   const issuedCapability = ref<Capability | null>(null)
   const messages = ref<MessageSummary[]>([])
@@ -46,11 +47,20 @@ export function useMailbox(client = new MailWispClient()) {
     error.value = null
     activeRequest = new AbortController()
     try {
-      const [loadedInbox, loadedMessages] = await Promise.all([
-        client.getInbox(normalized, activeRequest.signal),
-        client.listMessages(normalized, 100, activeRequest.signal),
-      ])
-      token.value = normalized
+	  let credential = normalized
+	  let loadedInbox: Inbox
+	  try {
+		const session = await client.exchangeSession(normalized, activeRequest.signal)
+		loadedInbox = session.inbox
+		sessionActive.value = true
+		credential = ''
+	  } catch (cause) {
+		if (!(cause instanceof APIError) || cause.code !== 'not_configured') throw cause
+		loadedInbox = await client.getInbox(normalized, activeRequest.signal)
+		sessionActive.value = false
+	  }
+	  const loadedMessages = await client.listMessages(credential, 100, activeRequest.signal)
+	  token.value = credential
       inbox.value = loadedInbox
       messages.value = loadedMessages
       issuedCapability.value = null
@@ -62,7 +72,7 @@ export function useMailbox(client = new MailWispClient()) {
   }
 
   async function refreshMessages(): Promise<void> {
-    if (!token.value || refreshing.value) return
+	if ((!token.value && !sessionActive.value) || refreshing.value) return
     refreshing.value = true
     cancelActiveRequest()
     const controller = new AbortController()
@@ -119,7 +129,9 @@ export function useMailbox(client = new MailWispClient()) {
   function reset(): void {
     cancelActiveRequest()
     stopPoll()
-    token.value = ''
+	if (sessionActive.value) void client.deleteSession().catch(() => undefined)
+	sessionActive.value = false
+	token.value = ''
     inbox.value = null
     issuedCapability.value = null
     messages.value = []
@@ -160,8 +172,25 @@ export function useMailbox(client = new MailWispClient()) {
     stopPoll()
   })
 
+	void restoreSession()
+
+	async function restoreSession(): Promise<void> {
+	  try {
+		const session = await client.getSession()
+		const loadedMessages = await client.listMessages('', 100)
+		sessionActive.value = true
+		inbox.value = session.inbox
+		messages.value = loadedMessages
+		phase.value = 'inbox'
+		schedulePoll()
+	  } catch (cause) {
+		if (cause instanceof APIError && (cause.code === 'unauthenticated' || cause.code === 'not_configured' || cause.code === 'network_error' || cause.code === 'unexpected_response')) return
+		handleError(cause)
+	  }
+	}
+
   return {
-    phase, token, inbox, issuedCapability, messages, selected, error, refreshing,
+	phase, token, sessionActive, inbox, issuedCapability, messages, selected, error, refreshing,
     createInbox, openInbox, refreshMessages, openMessage, closeMessage, deleteMessage, deleteInbox, reset,
   }
 }

@@ -17,6 +17,12 @@ export interface CreatedInbox {
   capability: Capability
 }
 
+export interface BrowserSession {
+	inbox: Inbox
+	expires_at: string
+	csrf_token: string
+}
+
 export interface MailAddress {
   name: string
   address: string
