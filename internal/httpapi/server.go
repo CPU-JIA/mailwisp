@@ -19,6 +19,7 @@ import (
 
 	"mailwisp/internal/auth"
 	"mailwisp/internal/config"
+	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
 )
@@ -54,6 +55,7 @@ type Server struct {
 	authenticator    CapabilityAuthenticator
 	limiter          *createLimiter
 	trustedProxies   []*net.IPNet
+	duckMail         *duckmail.Service
 }
 
 // NewServer creates a production-configured public HTTP server.
@@ -84,6 +86,16 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages", server.handleListMessages)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages/{id}", server.handleGetMessage)
 	mux.HandleFunc("DELETE /api/v1/inboxes/me/messages/{id}", server.handleDeleteMessage)
+	mux.HandleFunc("GET /compat/duckmail/domains", server.handleDuckMailDomains)
+	mux.HandleFunc("POST /compat/duckmail/accounts", server.handleDuckMailCreateAccount)
+	mux.HandleFunc("POST /compat/duckmail/token", server.handleDuckMailToken)
+	mux.HandleFunc("GET /compat/duckmail/me", server.handleDuckMailMe)
+	mux.HandleFunc("DELETE /compat/duckmail/accounts/{id}", server.handleDuckMailDeleteAccount)
+	mux.HandleFunc("GET /compat/duckmail/messages", server.handleDuckMailMessages)
+	mux.HandleFunc("GET /compat/duckmail/messages/{id}", server.handleDuckMailMessage)
+	mux.HandleFunc("PATCH /compat/duckmail/messages/{id}", server.handleDuckMailSeen)
+	mux.HandleFunc("DELETE /compat/duckmail/messages/{id}", server.handleDuckMailDeleteMessage)
+	mux.HandleFunc("GET /compat/duckmail/sources/{id}", server.handleDuckMailSource)
 
 	server.httpServer = &http.Server{
 		Addr:              cfg.Addr,
@@ -105,6 +117,9 @@ func (s *Server) SetMailboxService(service MailboxService, authenticator Capabil
 	s.mailbox = service
 	s.authenticator = authenticator
 }
+
+// SetDuckMailService enables the isolated DuckMail compatibility namespace.
+func (s *Server) SetDuckMailService(service *duckmail.Service) { s.duckMail = service }
 
 // SetReady changes the readiness state exposed to the service manager.
 func (s *Server) SetReady(ready bool) { s.ready.Store(ready) }

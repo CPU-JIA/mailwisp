@@ -3,6 +3,7 @@ package mailbox
 
 import (
 	"errors"
+	"io"
 	"time"
 
 	"mailwisp/internal/mail"
@@ -48,6 +49,7 @@ type MessageSummary struct {
 	ParseStatus    string            `json:"parse_status"`
 	SizeBytes      int64             `json:"size_bytes"`
 	HasAttachments bool              `json:"has_attachments"`
+	Seen           bool              `json:"seen"`
 }
 
 // MessageDetail contains parsed, untrusted email content.
@@ -66,5 +68,18 @@ type MessageDetail struct {
 
 // Page bounds one deterministic message listing.
 type Page struct {
-	Limit int
+	Limit  int
+	Offset int
+}
+
+// MessagePage contains one bounded page and the complete Inbox item count.
+type MessagePage struct {
+	Items []MessageSummary
+	Total int
+}
+
+// RawSource is one owned immutable RFC 822 message stream.
+type RawSource struct {
+	Reader io.ReadCloser
+	Size   int64
 }

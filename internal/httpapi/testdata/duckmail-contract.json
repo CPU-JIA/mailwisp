@@ -1,0 +1,20 @@
+{
+  "source": "https://raw.githubusercontent.com/MoonWeSif/DuckMail/main/public/llm-api-docs.txt",
+  "accessed_at": "2026-07-15",
+  "upstream_base_url": "https://api.duckmail.sbs",
+  "mailwisp_namespace": "/compat/duckmail",
+  "page_size": 30,
+  "error_fields": ["error", "message"],
+  "endpoints": [
+    "GET /domains",
+    "POST /accounts",
+    "POST /token",
+    "GET /me",
+    "DELETE /accounts/{id}",
+    "GET /messages",
+    "GET /messages/{id}",
+    "PATCH /messages/{id}",
+    "DELETE /messages/{id}",
+    "GET /sources/{id}"
+  ]
+}

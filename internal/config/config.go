@@ -22,6 +22,7 @@ type Config struct {
 	Postgres        Postgres
 	Content         Content
 	Inbox           Inbox
+	Compatibility   Compatibility
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 }
@@ -45,6 +46,11 @@ type Inbox struct {
 	PublicDomains []string
 	DefaultTTL    time.Duration
 	MaxTTL        time.Duration
+}
+
+// Compatibility enables isolated third-party HTTP adapters.
+type Compatibility struct {
+	DuckMailEnabled bool
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -88,6 +94,10 @@ type Content struct {
 // Load reads configuration from the process environment and validates it.
 func Load() (Config, error) {
 	logLevel, err := parseLogLevel(value("LOG_LEVEL", "info"))
+	if err != nil {
+		return Config{}, err
+	}
+	duckMailEnabled, err := parseBoolean("DUCKMAIL_ENABLED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -139,6 +149,9 @@ func Load() (Config, error) {
 			PublicDomains: commaSeparated("PUBLIC_DOMAINS", "mailwisp.local"),
 			DefaultTTL:    duration("INBOX_DEFAULT_TTL", 24*time.Hour),
 			MaxTTL:        duration("INBOX_MAX_TTL", 7*24*time.Hour),
+		},
+		Compatibility: Compatibility{
+			DuckMailEnabled: duckMailEnabled,
 		},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
@@ -345,6 +358,15 @@ func integer32(name string, fallback int32) int32 {
 		return 0
 	}
 	return int32(parsed)
+}
+
+func parseBoolean(name string, fallback bool) (bool, error) {
+	raw := value(name, strconv.FormatBool(fallback))
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("MAILWISP_%s: %w", name, err)
+	}
+	return parsed, nil
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {
