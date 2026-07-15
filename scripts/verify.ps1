@@ -88,6 +88,34 @@ try {
                 $linuxGoImage `
                 sh -c 'go test ./... && go test -race ./...'
         }
+
+        $postfixImage = 'mailwisp/postfix-integration:3.11.5-r0'
+        $postfixContext = Join-Path $repositoryRoot 'deploy/postfix-test'
+        if ($env:GITHUB_ACTIONS -eq 'true') {
+            Invoke-Native -Name 'docker buildx version' -Command { docker buildx version }
+            Invoke-Native -Name 'pinned Postfix integration image with GitHub Actions cache' -Command {
+                docker buildx build `
+                    --platform linux/amd64 `
+                    --pull `
+                    --load `
+                    --tag $postfixImage `
+                    --cache-from 'type=gha,scope=postfix-integration' `
+                    --cache-to 'type=gha,mode=max,scope=postfix-integration' `
+                    $postfixContext
+            }
+        } else {
+            Invoke-Native -Name 'pinned Postfix integration image' -Command {
+                docker build `
+                    --platform linux/amd64 `
+                    --pull `
+                    --tag $postfixImage `
+                    $postfixContext
+            }
+        }
+
+        $env:MAILWISP_POSTFIX_EVIDENCE_DIR = Join-Path $repositoryRoot 'artifacts/postfix-integration'
+        Invoke-Native -Name 'Postfix LMTP integration tests' -Command { go test -tags=integration ./internal/postfix -count=1 }
+        Invoke-Native -Name 'Postfix LMTP integration race tests' -Command { go test -race -tags=integration ./internal/postfix -count=1 }
         Invoke-Native -Name 'postgres integration tests' -Command { go test -tags=integration ./internal/postgres -count=1 }
         Invoke-Native -Name 'postgres integration race tests' -Command { go test -race -tags=integration ./internal/postgres -count=1 }
     } else {
