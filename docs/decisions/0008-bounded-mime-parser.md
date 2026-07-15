@@ -7,7 +7,7 @@
 
 MailWisp在LMTP确认前只持久化Raw MIME与Message Metadata，复杂邮件解析必须异步执行。邮件内容完全不可信，可能包含超大Header、深层Multipart、海量Part、畸形Transfer Encoding、未知Charset、路径型Filename和追踪HTML。Parser既不能阻塞可靠收件，也不能在个人服务器上无界占用内存。
 
-旧TempMail解析器会把完整Raw Message和每个Multipart Body读入内存，只限制最终正文字符串；它没有Header Count、Header Bytes、Part Count、Depth、Total Decoded Bytes和Attachment Size不变量，也没有完整Charset与附件语义，因此只保留为行为参考，不直接复用。
+常见高层MIME实现会把完整Raw Message或Decoded Part物化到内存，并缺少MailWisp要求的Header Count、Header Bytes、Part Count、Depth、Total Decoded Bytes和Attachment Size联合不变量，因此需要独立设计有界流式边界。
 
 ## 决策
 
@@ -81,7 +81,6 @@ Parser Worker、Content级领取、重试和结果持久化已在后续开发分
 
 ## 未采用方案
 
-- 旧TempMail Parser：资源与Charset边界不足。
 - enmime v2.4.1：功能完整且维护活跃，但默认把每个Decoded Part保存为`[]byte`并构建完整Part Tree，不符合当前低内存目标。
 - 只用`net/mail`和`mime/multipart`：依赖最少，但需要自行维护Charset、错误恢复和大量真实世界MIME兼容细节，收益不足。
 - Rust或WASM Parser：项目统一Go，跨语言构建与运行成本没有被当前证据证明必要。
