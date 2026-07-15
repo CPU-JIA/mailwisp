@@ -114,6 +114,7 @@ internal/account/    账户领域
 internal/domain/     邮件域名领域
 internal/mailbox/    邮箱领域
 internal/message/    收件消息领域
+internal/contentstore/ Raw MIME与大附件Content Storage适配器
 internal/jobs/       定时维护任务
 internal/postgres/   PostgreSQL适配器
 internal/rediscache/ 可选Redis适配器
