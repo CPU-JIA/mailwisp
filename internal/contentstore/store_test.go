@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,6 +228,17 @@ func TestStoreRejectsInvalidKeys(t *testing.T) {
 		if _, err := store.OpenContent(message.ContentRef{Key: key}); !errors.Is(err, ErrInvalidKey) {
 			t.Errorf("OpenContent(%q) error = %v, want ErrInvalidKey", key, err)
 		}
+	}
+}
+
+func TestOpenRawHonorsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t, 1024)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.OpenRaw(ctx, message.ContentRef{Key: "sha256/" + strings.Repeat("a", 64)}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenRaw(canceled) error = %v, want context.Canceled", err)
 	}
 }
 

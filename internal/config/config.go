@@ -17,6 +17,7 @@ const prefix = "MAILWISP_"
 type Config struct {
 	HTTP            HTTP
 	LMTP            LMTP
+	Parser          Parser
 	Postgres        Postgres
 	Content         Content
 	LogLevel        slog.Level
@@ -45,6 +46,17 @@ type LMTP struct {
 	MaxSessions      int
 	SessionTimeout   time.Duration
 	DeliveryTimeout  time.Duration
+}
+
+// Parser contains bounded background MIME parsing settings.
+type Parser struct {
+	Workers       int
+	PollInterval  time.Duration
+	ParseTimeout  time.Duration
+	LeaseDuration time.Duration
+	MaxAttempts   int
+	RetryBase     time.Duration
+	RetryMax      time.Duration
 }
 
 // Postgres contains PostgreSQL connection pool settings.
@@ -88,6 +100,15 @@ func Load() (Config, error) {
 			MaxSessions:      integer("LMTP_MAX_SESSIONS", 64),
 			SessionTimeout:   duration("LMTP_SESSION_TIMEOUT", 5*time.Minute),
 			DeliveryTimeout:  duration("LMTP_DELIVERY_TIMEOUT", 30*time.Second),
+		},
+		Parser: Parser{
+			Workers:       integer("PARSER_WORKERS", 2),
+			PollInterval:  duration("PARSER_POLL_INTERVAL", time.Second),
+			ParseTimeout:  duration("PARSER_TIMEOUT", 30*time.Second),
+			LeaseDuration: duration("PARSER_LEASE_DURATION", time.Minute),
+			MaxAttempts:   integer("PARSER_MAX_ATTEMPTS", 5),
+			RetryBase:     duration("PARSER_RETRY_BASE", 5*time.Second),
+			RetryMax:      duration("PARSER_RETRY_MAX", 5*time.Minute),
 		},
 		Postgres: Postgres{
 			DSN:            value("POSTGRES_DSN", ""),
@@ -159,6 +180,24 @@ func (c Config) Validate() error {
 	}
 	if c.LMTP.SessionTimeout < c.LMTP.DeliveryTimeout {
 		errs = append(errs, errors.New("MAILWISP_LMTP_SESSION_TIMEOUT must not be shorter than MAILWISP_LMTP_DELIVERY_TIMEOUT"))
+	}
+	if c.Parser.Workers <= 0 || c.Parser.Workers > 64 {
+		errs = append(errs, errors.New("MAILWISP_PARSER_WORKERS must be between 1 and 64"))
+	}
+	if c.Parser.PollInterval < 100*time.Millisecond || c.Parser.PollInterval > time.Minute {
+		errs = append(errs, errors.New("MAILWISP_PARSER_POLL_INTERVAL must be between 100ms and 1m"))
+	}
+	if c.Parser.ParseTimeout <= 0 || c.Parser.ParseTimeout > 5*time.Minute {
+		errs = append(errs, errors.New("MAILWISP_PARSER_TIMEOUT must be between 1ns and 5m"))
+	}
+	if c.Parser.LeaseDuration <= c.Parser.ParseTimeout || c.Parser.LeaseDuration > 10*time.Minute {
+		errs = append(errs, errors.New("MAILWISP_PARSER_LEASE_DURATION must exceed parser timeout and be at most 10m"))
+	}
+	if c.Parser.MaxAttempts <= 0 || c.Parser.MaxAttempts > 100 {
+		errs = append(errs, errors.New("MAILWISP_PARSER_MAX_ATTEMPTS must be between 1 and 100"))
+	}
+	if c.Parser.RetryBase <= 0 || c.Parser.RetryMax < c.Parser.RetryBase || c.Parser.RetryMax > 24*time.Hour {
+		errs = append(errs, errors.New("MAILWISP_PARSER_RETRY_BASE and MAILWISP_PARSER_RETRY_MAX must define a positive range up to 24h"))
 	}
 	if strings.TrimSpace(c.Postgres.DSN) == "" {
 		errs = append(errs, errors.New("MAILWISP_POSTGRES_DSN must not be empty"))

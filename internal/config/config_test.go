@@ -30,6 +30,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LMTP.Addr != "127.0.0.1:2525" || cfg.LMTP.MaxMessageBytes != 25<<20 {
 		t.Fatalf("LMTP defaults = %+v", cfg.LMTP)
 	}
+	if cfg.Parser.Workers != 2 || cfg.Parser.ParseTimeout != 30*time.Second || cfg.Parser.LeaseDuration != time.Minute {
+		t.Fatalf("Parser defaults = %+v", cfg.Parser)
+	}
 	if cfg.Postgres.MaxConnections != 10 || cfg.Postgres.MinConnections != 1 {
 		t.Fatalf("Postgres defaults = %+v", cfg.Postgres)
 	}
@@ -83,6 +86,16 @@ func TestValidateRejectsInvalidPostgresPool(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsParserLeaseNotLongerThanTimeout(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"PARSER_TIMEOUT", "30s")
+	t.Setenv(prefix+"PARSER_LEASE_DURATION", "30s")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want parser lease validation error")
+	}
+}
+
 func clearConfigurationEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
@@ -104,6 +117,13 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"LMTP_MAX_SESSIONS",
 		"LMTP_SESSION_TIMEOUT",
 		"LMTP_DELIVERY_TIMEOUT",
+		"PARSER_WORKERS",
+		"PARSER_POLL_INTERVAL",
+		"PARSER_TIMEOUT",
+		"PARSER_LEASE_DURATION",
+		"PARSER_MAX_ATTEMPTS",
+		"PARSER_RETRY_BASE",
+		"PARSER_RETRY_MAX",
 		"POSTGRES_DSN",
 		"POSTGRES_MIN_CONNECTIONS",
 		"POSTGRES_MAX_CONNECTIONS",
