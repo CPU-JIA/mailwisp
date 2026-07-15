@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/config"
 	"mailwisp/internal/mailbox"
@@ -121,6 +122,33 @@ func TestCanonicalInboxAPIRequiresCapabilityAndReturnsRequestID(t *testing.T) {
 	}
 }
 
+func TestCanonicalCreateUsesPersistentDailyQuota(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(config.HTTP{CreateRatePerMinute: 60, CreateRateBurst: 10}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	mailboxes := &mailboxAPIStub{}
+	quota := &createQuotaStub{}
+	server.SetMailboxService(mailboxes, &authStub{})
+	server.SetCreateQuota(quota)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/inboxes", strings.NewReader(`{"domain":"mailwisp.test"}`))
+	request.RemoteAddr = "192.0.2.10:1234"
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || recorder.Header().Get("RateLimit-Limit") != "100" || quota.clientAddress != "192.0.2.10" || mailboxes.creates != 1 {
+		t.Fatalf("create response=%d headers=%v client=%q creates=%d", recorder.Code, recorder.Header(), quota.clientAddress, mailboxes.creates)
+	}
+
+	quota.err = abuse.ErrDailyCreateQuotaExceeded
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/inboxes", strings.NewReader(`{}`))
+	request.RemoteAddr = "192.0.2.10:1235"
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Retry-After") == "" || mailboxes.creates != 1 {
+		t.Fatalf("quota response=%d headers=%v creates=%d body=%s", recorder.Code, recorder.Header(), mailboxes.creates, recorder.Body.String())
+	}
+}
+
 func TestBrowserSessionExchangeRequiresCSRFForMutation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, logger)
@@ -215,10 +243,11 @@ func (*authStub) Authenticate(context.Context, string, ...auth.Scope) (auth.Prin
 	return auth.Principal{InboxID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Scopes: scopes, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-type mailboxAPIStub struct{}
+type mailboxAPIStub struct{ creates int }
 
-func (*mailboxAPIStub) Create(context.Context, mailbox.CreateRequest) (mailbox.CreatedInbox, error) {
-	return mailbox.CreatedInbox{}, nil
+func (s *mailboxAPIStub) Create(context.Context, mailbox.CreateRequest) (mailbox.CreatedInbox, error) {
+	s.creates++
+	return mailbox.CreatedInbox{Inbox: mailbox.Inbox{Address: "demo@mailwisp.test"}, Capability: auth.IssuedCapability{Plaintext: "created-token"}}, nil
 }
 func (*mailboxAPIStub) Get(context.Context, message.InboxID) (mailbox.Inbox, error) {
 	return mailbox.Inbox{ID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Address: "demo@mailwisp.test", Status: "active"}, nil
@@ -239,4 +268,18 @@ func (*mailboxAPIStub) DeleteMessage(context.Context, message.InboxID, message.M
 
 func (s *readinessStub) Ready(context.Context) error {
 	return s.err
+}
+
+type createQuotaStub struct {
+	clientAddress string
+	err           error
+}
+
+func (s *createQuotaStub) Consume(_ context.Context, clientAddress string) (abuse.Decision, error) {
+	s.clientAddress = clientAddress
+	decision := abuse.Decision{Limit: 100, Remaining: 99, ResetAt: time.Now().Add(time.Hour)}
+	if errors.Is(s.err, abuse.ErrDailyCreateQuotaExceeded) {
+		decision.Remaining = 0
+	}
+	return decision, s.err
 }

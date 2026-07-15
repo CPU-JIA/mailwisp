@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/config"
 	"mailwisp/internal/mailbox"
@@ -39,7 +40,9 @@ func TestYYDSContractTemporaryInboxAndMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := NewServer(config.HTTP{CreateRatePerMinute: 60, CreateRateBurst: 10}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	quota := &createQuotaStub{}
 	server.SetMailboxService(mailboxes, credentials)
+	server.SetCreateQuota(quota)
 	server.SetYYDSService(service)
 
 	domains := performYYDSRequest(server, http.MethodGet, "/compat/yyds/v1/domains", "", "")
@@ -54,6 +57,12 @@ func TestYYDSContractTemporaryInboxAndMessages(t *testing.T) {
 	if legacy.Code != http.StatusCreated || !strings.Contains(legacy.Body.String(), `"address":"legacy@mailwisp.test"`) {
 		t.Fatalf("legacy account = %d %s", legacy.Code, legacy.Body.String())
 	}
+	quota.err = abuse.ErrDailyCreateQuotaExceeded
+	limited := performYYDSRequest(server, http.MethodPost, "/compat/yyds/v1/accounts", `{"localPart":"limited","domain":"mailwisp.test"}`, "")
+	if limited.Code != http.StatusTooManyRequests || !strings.Contains(limited.Body.String(), `"errorCode":"daily_quota_exceeded"`) {
+		t.Fatalf("daily quota = %d %s", limited.Code, limited.Body.String())
+	}
+	quota.err = nil
 	wildcard := performYYDSRequest(server, http.MethodPost, "/compat/yyds/v1/accounts", `{"subdomainLabel":"child"}`, "")
 	if wildcard.Code != http.StatusBadRequest || !strings.Contains(wildcard.Body.String(), `"errorCode":"wildcard_rule_unavailable"`) {
 		t.Fatalf("wildcard account = %d %s", wildcard.Code, wildcard.Body.String())

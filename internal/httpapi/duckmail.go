@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mail"
@@ -92,6 +93,16 @@ func (s *Server) handleDuckMailCreateAccount(w http.ResponseWriter, r *http.Requ
 		ExpiresIn *int64 `json:"expiresIn"`
 	}
 	if !decodeDuckJSON(w, r, &request) {
+		return
+	}
+	decision, err := s.consumeCreateQuota(r)
+	setCreateQuotaHeaders(w, decision, err)
+	if errors.Is(err, abuse.ErrDailyCreateQuotaExceeded) {
+		writeDuckError(w, http.StatusTooManyRequests, "Too Many Requests", "Daily account quota exceeded")
+		return
+	}
+	if err != nil {
+		writeDuckError(w, http.StatusInternalServerError, "Internal Server Error", "Persistent account admission failed")
 		return
 	}
 	inbox, err := s.duckMail.CreateAccount(r.Context(), duckmail.CreateAccountRequest{Address: request.Address, Password: request.Password, ExpiresIn: request.ExpiresIn})

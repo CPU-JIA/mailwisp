@@ -44,6 +44,9 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Inbox.MaxMessages != 500 || cfg.Inbox.MaxStorageBytes != 256<<20 || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled || cfg.Compatibility.CloudflareTempEnabled || cfg.Compatibility.CloudflareLegacyPathsEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
+	if cfg.CreateQuota.DailyLimit != 100 || len(cfg.CreateQuota.HMACKey) != 0 {
+		t.Fatalf("CreateQuota defaults = %+v", cfg.CreateQuota)
+	}
 	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour {
 		t.Fatalf("BrowserSession defaults = %+v", cfg.BrowserSession)
 	}
@@ -113,6 +116,65 @@ func TestLoadBrowserSessionKeyFile(t *testing.T) {
 	cfg, err := Load()
 	if err != nil || len(cfg.BrowserSession.Key) != 32 {
 		t.Fatalf("Load() key length = %d, error = %v", len(cfg.BrowserSession.Key), err)
+	}
+}
+
+func TestLoadCreateQuotaHMACKeyFile(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	path := filepath.Join(t.TempDir(), "create-quota-key")
+	if err := os.WriteFile(path, []byte("UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"CREATE_QUOTA_HMAC_KEY_FILE", path)
+	cfg, err := Load()
+	if err != nil || len(cfg.CreateQuota.HMACKey) != 32 {
+		t.Fatalf("Load() quota key length = %d, error = %v", len(cfg.CreateQuota.HMACKey), err)
+	}
+}
+
+func TestLoadRejectsInvalidCreateQuotaConfiguration(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T)
+	}{
+		{
+			name: "zero daily limit",
+			setup: func(t *testing.T) {
+				t.Setenv(prefix+"CREATE_DAILY_LIMIT", "0")
+			},
+		},
+		{
+			name: "key and key file together",
+			setup: func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "create-quota-key")
+				if err := os.WriteFile(path, []byte("UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv(prefix+"CREATE_QUOTA_HMAC_KEY", "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=")
+				t.Setenv(prefix+"CREATE_QUOTA_HMAC_KEY_FILE", path)
+			},
+		},
+		{
+			name: "wrong key file length",
+			setup: func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "create-quota-key")
+				if err := os.WriteFile(path, []byte("c2hvcnQ=\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv(prefix+"CREATE_QUOTA_HMAC_KEY_FILE", path)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigurationEnvironment(t)
+			t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+			test.setup(t)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want create quota validation error")
+			}
+		})
 	}
 }
 
@@ -222,6 +284,9 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"READINESS_TIMEOUT",
 		"CREATE_RATE_PER_MINUTE",
 		"CREATE_RATE_BURST",
+		"CREATE_DAILY_LIMIT",
+		"CREATE_QUOTA_HMAC_KEY",
+		"CREATE_QUOTA_HMAC_KEY_FILE",
 		"TRUSTED_PROXY_CIDRS",
 		"PUBLIC_DOMAINS",
 		"INBOX_DEFAULT_TTL",

@@ -13,12 +13,22 @@ cp mailwisp.env.example mailwisp.env
 install -d -m 0700 secrets backups
 openssl rand -base64 32 > secrets/postgres_password.txt
 openssl rand -base64 32 > secrets/browser_session_key.txt
+openssl rand -base64 32 > secrets/create_quota_hmac_key.txt
 chmod 0600 secrets/postgres_password.txt
 chmod 0600 secrets/browser_session_key.txt
+chmod 0600 secrets/create_quota_hmac_key.txt
 sudo chown -R 65532:65532 backups
 ```
 
-编辑`.env`中的Web域名、SMTP Host、收件域名和证书名称；编辑`mailwisp.env`中的公开域名与LMTP Host。Browser Session Key通过独立Docker Secret文件注入，不写入普通环境变量或Git。
+编辑`.env`中的Web域名、SMTP Host、收件域名和证书名称；编辑`mailwisp.env`中的公开域名与LMTP Host。Browser Session Key与Create Quota HMAC Key通过独立Docker Secret文件注入，不写入普通环境变量或Git。
+
+匿名创建先经过进程内瞬时Token Bucket，再经过PostgreSQL持久UTC日配额。默认每个HMAC客户端身份每天100次：
+
+```dotenv
+MAILWISP_CREATE_DAILY_LIMIT=100
+```
+
+数据库只保存HMAC-SHA-256身份摘要，不保存Plaintext IP；HMAC Key必须独立生成并纳入Secret备份。轮换Key会立即切换到新的Quota Identity，等同于重置当日客户端计数，必须作为有意的运维动作执行。
 
 `mailwisp.env`默认把每个Inbox限制为500条Message和256 MiB逻辑存储：
 
@@ -61,6 +71,8 @@ docker compose logs --tail=100 app postfix edge
 ```
 
 `migrate`是一次性服务；`app`只有在Migration成功后启动，Edge和Postfix只有在App Readiness通过后启动。默认不运行Redis、PgBouncer、消息队列或生产Node.js。
+
+Docker Hub链路较慢时，应在Host Docker daemon配置可信`registry-mirrors`或组织级Pull-through Cache。MailWisp仍使用官方镜像名和锁定Digest，不在Compose中硬编码地域Mirror，也不接受只保留Tag、无法证明与原Digest一致的重打包镜像。Mirror只改变传输路径，不改变镜像身份。
 
 内部Metrics不通过Edge公开。临时诊断可执行：
 

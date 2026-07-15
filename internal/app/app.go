@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/config"
@@ -95,6 +96,14 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create Inbox repository: %w", err)
 	}
+	createQuotaRepository, err := postgres.NewCreateQuotaRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("create Inbox quota repository: %w", err)
+	}
+	createQuota, err := abuse.NewService(createQuotaRepository, cfg.CreateQuota.HMACKey, cfg.CreateQuota.DailyLimit)
+	if err != nil {
+		return nil, fmt.Errorf("create persistent Inbox admission: %w", err)
+	}
 	parserLimits := mail.DefaultLimits()
 	parserLimits.MaxRawBytes = cfg.LMTP.MaxMessageBytes
 	parser, err := mail.NewParser(parserLimits)
@@ -154,6 +163,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	httpServer.SetMetrics(metrics.Handler(), metrics)
 	httpServer.SetReadinessChecker(repository)
 	httpServer.SetMailboxService(mailboxService, capabilityService)
+	httpServer.SetCreateQuota(createQuota)
 	if len(cfg.BrowserSession.Key) != 0 {
 		browserSessions, err := auth.NewBrowserSessionManager(cfg.BrowserSession.Key, cfg.BrowserSession.Lifetime)
 		if err != nil {

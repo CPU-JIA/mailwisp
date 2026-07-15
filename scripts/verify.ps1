@@ -172,10 +172,16 @@ try {
         try {
             $composeEnvironment = Join-Path $composeFixtureRoot 'mailwisp.env'
             $composePassword = Join-Path $composeFixtureRoot 'postgres_password.txt'
+            $composeBrowserSessionKey = Join-Path $composeFixtureRoot 'browser_session_key.txt'
+            $composeCreateQuotaKey = Join-Path $composeFixtureRoot 'create_quota_hmac_key.txt'
             [System.IO.File]::WriteAllText($composeEnvironment, "MAILWISP_PUBLIC_DOMAINS=example.com`nMAILWISP_LMTP_HOSTNAME=mx.example.com`n")
             [System.IO.File]::WriteAllText($composePassword, "compose-verification-password`n")
+            [System.IO.File]::WriteAllText($composeBrowserSessionKey, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=`n")
+            [System.IO.File]::WriteAllText($composeCreateQuotaKey, "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=`n")
             $env:MAILWISP_ENV_FILE = $composeEnvironment
             $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $composePassword
+            $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $composeBrowserSessionKey
+            $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $composeCreateQuotaKey
             $env:MAILWISP_WEB_DOMAIN = 'mail.example.com'
             $env:MAILWISP_SMTP_HOST = 'mx.example.com'
             $env:MAILWISP_MAIL_DOMAIN = 'example.com'
@@ -186,6 +192,8 @@ try {
         } finally {
             Remove-Item Env:MAILWISP_ENV_FILE -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_WEB_DOMAIN -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_SMTP_HOST -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_MAIL_DOMAIN -ErrorAction SilentlyContinue

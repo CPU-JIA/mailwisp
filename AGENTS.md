@@ -297,6 +297,7 @@ docs/decisions/      Architecture Decision Record
 
 ## 20. 容器与部署
 
+- `deploy/compose/`是Canonical单机Reference Deployment，也是README、CI、Release、备份恢复与容量验证的主推荐路径；`deploy/reference/` Host-native只作为辅助Profile，不得与Compose并列描述为默认方案。
 - 生产Image使用固定Version Tag，Release Lock可进一步固定Digest。
 - 禁止使用 `latest`、未限定Major的浮动依赖和无法复现的远程安装脚本。
 - Go、Module、Base Image、Node、Package Manager、Frontend Dependency、CI Action和开发工具必须固定明确版本。

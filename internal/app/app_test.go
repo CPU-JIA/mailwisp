@@ -40,6 +40,11 @@ func TestNewValidatesDependenciesAndDSN(t *testing.T) {
 	if _, err := New(context.Background(), cfg, discardLogger()); err == nil {
 		t.Fatal("New(invalid DSN) error = nil, want error")
 	}
+	cfg = testConfig(t)
+	cfg.CreateQuota.HMACKey = nil
+	if _, err := New(context.Background(), cfg, discardLogger()); err == nil {
+		t.Fatal("New(missing create quota HMAC key) error = nil, want error")
+	}
 }
 
 func TestRunFailsWhenPostgresIsUnavailable(t *testing.T) {
@@ -157,6 +162,7 @@ func testConfig(t *testing.T) config.Config {
 			MaxMessages:     500,
 			MaxStorageBytes: 1 << 20,
 		},
+		CreateQuota:     config.CreateQuota{DailyLimit: 100, HMACKey: bytes.Repeat([]byte{'q'}, 32)},
 		LogLevel:        slog.LevelInfo,
 		ShutdownTimeout: time.Second,
 	}
