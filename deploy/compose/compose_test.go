@@ -16,7 +16,7 @@ func TestComposeProductionContract(t *testing.T) {
 		{"Dockerfile", []string{"golang:1.26.5-alpine3.24@sha256:", "node:22.20.0-alpine3.22@sha256:", "nginx:1.30.3-alpine@sha256:", "USER 65532:65532", "npm ci", "-trimpath"}, []string{"latest"}},
 		{"postfix/Dockerfile", []string{"alpine:3.24.1@sha256:", "postfix=3.11.5-r0", "--chmod=0755"}, []string{"latest"}},
 		{"postfix/entrypoint.sh", []string{"reject_unauth_destination", "smtpd_tls_protocols = >=TLSv1.2", "postfix check", "lmtp:inet:app:2525"}, nil},
-		{"nginx/default.conf.template", []string{"ssl_protocols TLSv1.2 TLSv1.3", "Content-Security-Policy", "proxy_pass http://app:8080", "limit_req zone=mailwisp_create"}, nil},
+		{"nginx/default.conf.template", []string{"ssl_protocols TLSv1.2 TLSv1.3", "Content-Security-Policy", "proxy_pass http://app:8080", "limit_req zone=mailwisp_create", "location = /metrics", "return 404"}, nil},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {

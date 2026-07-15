@@ -30,6 +30,11 @@ type ReadinessChecker interface {
 	Ready(context.Context) error
 }
 
+// HTTPMetrics observes bounded route patterns and durations.
+type HTTPMetrics interface {
+	ObserveHTTPRequest(method, route string, status int, duration time.Duration)
+}
+
 // MailboxService is the canonical Inbox and message application boundary.
 type MailboxService interface {
 	Create(context.Context, mailbox.CreateRequest) (mailbox.CreatedInbox, error)
@@ -59,6 +64,8 @@ type Server struct {
 	limiter          *createLimiter
 	trustedProxies   []*net.IPNet
 	duckMail         *duckmail.Service
+	metricsHandler   http.Handler
+	metrics          HTTPMetrics
 }
 
 // NewServer creates a production-configured public HTTP server.
@@ -83,6 +90,7 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /livez", server.handleLive)
 	mux.HandleFunc("GET /readyz", server.handleReady)
 	mux.HandleFunc("GET /health", server.handleReady)
+	mux.HandleFunc("GET /metrics", server.handleMetrics)
 	mux.HandleFunc("POST /api/v1/inboxes", server.handleCreateInbox)
 	mux.HandleFunc("POST /api/v1/session", server.handleCreateSession)
 	mux.HandleFunc("GET /api/v1/session", server.handleGetSession)
@@ -106,7 +114,7 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 
 	server.httpServer = &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           requestID(requestLog(logger, recoverPanic(logger, mux))),
+		Handler:           requestID(requestLog(logger, server.observeHTTP(recoverPanic(logger, mux)))),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
@@ -132,6 +140,12 @@ func (s *Server) SetBrowserSessions(manager *auth.BrowserSessionManager) {
 
 // SetDuckMailService enables the isolated DuckMail compatibility namespace.
 func (s *Server) SetDuckMailService(service *duckmail.Service) { s.duckMail = service }
+
+// SetMetrics enables the internal Prometheus endpoint and request observer.
+func (s *Server) SetMetrics(handler http.Handler, observer HTTPMetrics) {
+	s.metricsHandler = handler
+	s.metrics = observer
+}
 
 // SetReady changes the readiness state exposed to the service manager.
 func (s *Server) SetReady(ready bool) { s.ready.Store(ready) }
@@ -172,6 +186,14 @@ func (s *Server) handleReady(w http.ResponseWriter, request *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, request *http.Request) {
+	if s.metricsHandler == nil {
+		http.NotFound(w, request)
+		return
+	}
+	s.metricsHandler.ServeHTTP(w, request)
 }
 
 func (s *Server) handleCreateInbox(w http.ResponseWriter, request *http.Request) {
@@ -532,6 +554,17 @@ func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
 		tracked := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(tracked, r)
 		logger.InfoContext(r.Context(), "http request", "request_id", requestIDFromContext(r.Context()), "method", r.Method, "path", r.URL.Path, "status", tracked.status, "duration_ms", time.Since(start).Milliseconds())
+	})
+}
+
+func (s *Server) observeHTTP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		tracked := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(tracked, r)
+		if s.metrics != nil {
+			s.metrics.ObserveHTTPRequest(r.Method, r.Pattern, tracked.status, time.Since(started))
+		}
 	})
 }
 

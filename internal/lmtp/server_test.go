@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,7 +175,6 @@ func TestSessionDrainsOversizedDataAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
-
 	runSession(t, server, func(client *lmtpClient) {
 		client.expectCode(220)
 		client.send("LHLO client")
@@ -330,6 +330,8 @@ func TestServerRejectsSessionsAboveBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
+	metrics := &lmtpMetricsStub{}
+	server.SetMetrics(metrics)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
@@ -362,6 +364,9 @@ func TestServerRejectsSessionsAboveBound(t *testing.T) {
 		cancel()
 		t.Fatalf("second response = %q, error = %v", line, readErr)
 	}
+	if metrics.opened.Load() != 1 || metrics.rejected.Load() != 1 {
+		t.Fatalf("LMTP metrics = %+v", metrics)
+	}
 
 	cancel()
 	select {
@@ -373,6 +378,16 @@ func TestServerRejectsSessionsAboveBound(t *testing.T) {
 		t.Fatal("Serve() did not stop after cancellation")
 	}
 }
+
+type lmtpMetricsStub struct {
+	opened, closed, rejected atomic.Int64
+	deliveryStatus           atomic.Int64
+}
+
+func (m *lmtpMetricsStub) LMTPSessionOpened()        { m.opened.Add(1) }
+func (m *lmtpMetricsStub) LMTPSessionClosed()        { m.closed.Add(1) }
+func (m *lmtpMetricsStub) LMTPSessionRejected()      { m.rejected.Add(1) }
+func (m *lmtpMetricsStub) ObserveLMTPDelivery(v int) { m.deliveryStatus.Store(int64(v)) }
 
 func TestParseEnvelopePaths(t *testing.T) {
 	t.Parallel()

@@ -26,6 +26,14 @@ type MessageReceiver interface {
 	Receive(context.Context, message.ReceiveRequest) (message.Receipt, error)
 }
 
+// Metrics observes bounded LMTP admission and delivery outcomes.
+type Metrics interface {
+	LMTPSessionOpened()
+	LMTPSessionClosed()
+	LMTPSessionRejected()
+	ObserveLMTPDelivery(int)
+}
+
 // Options configures LMTP resource limits and deadlines.
 type Options struct {
 	Hostname         string
@@ -58,7 +66,11 @@ type Server struct {
 	resolver InboxResolver
 	receiver MessageReceiver
 	logger   *slog.Logger
+	metrics  Metrics
 }
+
+// SetMetrics enables LMTP admission and delivery observations.
+func (s *Server) SetMetrics(metrics Metrics) { s.metrics = metrics }
 
 // NewServer constructs an LMTP server.
 func NewServer(options Options, resolver InboxResolver, receiver MessageReceiver, logger *slog.Logger) (*Server, error) {
@@ -112,15 +124,24 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 
 		select {
 		case semaphore <- struct{}{}:
+			if s.metrics != nil {
+				s.metrics.LMTPSessionOpened()
+			}
 			sessions.Add(1)
 			go func() {
 				defer sessions.Done()
 				defer func() { <-semaphore }()
+				if s.metrics != nil {
+					defer s.metrics.LMTPSessionClosed()
+				}
 				if err := s.serveConnection(ctx, connection); err != nil && ctx.Err() == nil {
 					s.logger.Warn("LMTP session ended with error", "remote_addr", connection.RemoteAddr().String(), "error", err)
 				}
 			}()
 		default:
+			if s.metrics != nil {
+				s.metrics.LMTPSessionRejected()
+			}
 			s.logger.Warn("LMTP session rejected by concurrency limit", "remote_addr", connection.RemoteAddr().String())
 			_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
 			_, _ = io.WriteString(connection, "421 4.3.2 Too many LMTP sessions\r\n")
