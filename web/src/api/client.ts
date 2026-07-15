@@ -19,6 +19,7 @@ interface DataEnvelope<T> {
 
 export class MailWispClient {
   readonly #baseURL: string
+	#csrfToken = ''
 
   constructor(baseURL = '') {
     this.#baseURL = baseURL.replace(/\/$/, '')
@@ -33,20 +34,25 @@ export class MailWispClient {
     })
   }
 
-  exchangeSession(token: string, signal?: AbortSignal): Promise<BrowserSession> {
-    return this.#request<BrowserSession>('/api/v1/session', {
+  async exchangeSession(token: string, signal?: AbortSignal): Promise<BrowserSession> {
+    const session = await this.#request<BrowserSession>('/api/v1/session', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       signal,
     })
+	this.#csrfToken = session.csrf_token
+	return session
   }
 
-  getSession(signal?: AbortSignal): Promise<BrowserSession> {
-    return this.#request<BrowserSession>('/api/v1/session', { signal })
+  async getSession(signal?: AbortSignal): Promise<BrowserSession> {
+	const session = await this.#request<BrowserSession>('/api/v1/session', { signal })
+	this.#csrfToken = session.csrf_token
+	return session
   }
 
   async deleteSession(signal?: AbortSignal): Promise<void> {
     await this.#request<void>('/api/v1/session', { method: 'DELETE', headers: this.#csrfHeaders(), signal })
+	this.#csrfToken = ''
   }
 
   getInbox(token = '', signal?: AbortSignal): Promise<Inbox> {
@@ -87,9 +93,7 @@ export class MailWispClient {
 
   #csrfHeaders(token = ''): Record<string, string> {
     if (token) return {}
-    const csrf = document.cookie.split(';').map((value) => value.trim()).find((value) => value.startsWith('__Host-mailwisp_csrf=') || value.startsWith('mailwisp_csrf='))
-    const separator = csrf?.indexOf('=') ?? -1
-    return separator >= 0 ? { 'X-MailWisp-CSRF': decodeURIComponent(csrf!.slice(separator + 1)) } : {}
+	return this.#csrfToken ? { 'X-MailWisp-CSRF': this.#csrfToken } : {}
   }
 
   async #request<T>(path: string, init: RequestInit): Promise<T> {

@@ -109,7 +109,7 @@ func TestBrowserSessionExchangeRequiresCSRFForMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.SetBrowserSessions(manager, false)
+	server.SetBrowserSessions(manager)
 
 	exchange := httptest.NewRequest(http.MethodPost, "/api/v1/session", nil)
 	exchange.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
@@ -118,17 +118,23 @@ func TestBrowserSessionExchangeRequiresCSRFForMutation(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("exchange status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	var sessionCookie, csrfCookie *http.Cookie
+	var sessionCookie *http.Cookie
 	for _, cookie := range recorder.Result().Cookies() {
 		switch cookie.Name {
-		case "mailwisp_session":
+		case "__Host-mailwisp_session":
 			sessionCookie = cookie
-		case "mailwisp_csrf":
-			csrfCookie = cookie
 		}
 	}
-	if sessionCookie == nil || !sessionCookie.HttpOnly || csrfCookie == nil || csrfCookie.HttpOnly {
-		t.Fatalf("session cookies = %+v / %+v", sessionCookie, csrfCookie)
+	if sessionCookie == nil || !sessionCookie.HttpOnly || !sessionCookie.Secure {
+		t.Fatalf("session Cookie = %+v", sessionCookie)
+	}
+	var exchangeEnvelope struct {
+		Data struct {
+			CSRFToken string `json:"csrf_token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &exchangeEnvelope); err != nil || exchangeEnvelope.Data.CSRFToken == "" {
+		t.Fatalf("exchange CSRF response = %+v, %v", exchangeEnvelope, err)
 	}
 
 	get := httptest.NewRequest(http.MethodGet, "/api/v1/session", nil)
@@ -149,7 +155,7 @@ func TestBrowserSessionExchangeRequiresCSRFForMutation(t *testing.T) {
 
 	deleteWithCSRF := httptest.NewRequest(http.MethodDelete, "/api/v1/session", nil)
 	deleteWithCSRF.AddCookie(sessionCookie)
-	deleteWithCSRF.Header.Set("X-MailWisp-CSRF", csrfCookie.Value)
+	deleteWithCSRF.Header.Set("X-MailWisp-CSRF", exchangeEnvelope.Data.CSRFToken)
 	recorder = httptest.NewRecorder()
 	server.httpServer.Handler.ServeHTTP(recorder, deleteWithCSRF)
 	if recorder.Code != http.StatusNoContent {

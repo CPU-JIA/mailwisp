@@ -20,6 +20,7 @@ export interface CreatedInbox {
 export interface BrowserSession {
 	inbox: Inbox
 	expires_at: string
+	csrf_token: string
 }
 
 export interface MailAddress {

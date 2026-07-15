@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +24,8 @@ import (
 const (
 	browserSessionVersion = 1
 	csrfBytes             = 32
-	sessionPlaintextBytes = 1 + 16 + 8 + 4 + sha256.Size
+	expiryTextBytes       = 20
+	sessionPlaintextBytes = 1 + 16 + expiryTextBytes + 4 + sha256.Size
 	csrfDigestDomain      = "mailwisp-browser-csrf-v1\x00"
 )
 
@@ -98,10 +101,11 @@ func (m *BrowserSessionManager) Issue(ctx context.Context, principal Principal) 
 	plaintext := make([]byte, sessionPlaintextBytes)
 	plaintext[0] = browserSessionVersion
 	copy(plaintext[1:17], inboxUUID[:])
-	binary.BigEndian.PutUint64(plaintext[17:25], uint64(expiresAt.Unix()))
-	binary.BigEndian.PutUint32(plaintext[25:29], principal.Scopes.Mask())
+	expiryText := strconv.FormatInt(expiresAt.Unix(), 10)
+	copy(plaintext[17+expiryTextBytes-len(expiryText):17+expiryTextBytes], expiryText)
+	binary.BigEndian.PutUint32(plaintext[37:41], principal.Scopes.Mask())
 	digest := digestCSRF(csrf)
-	copy(plaintext[29:], digest[:])
+	copy(plaintext[41:], digest[:])
 	nonce := make([]byte, m.aead.NonceSize())
 	if _, err := io.ReadFull(m.random, nonce); err != nil {
 		return BrowserSession{}, fmt.Errorf("generate browser session nonce: %w", err)
@@ -131,11 +135,15 @@ func (m *BrowserSessionManager) Authenticate(ctx context.Context, cookieValue, c
 	if err != nil || len(plaintext) != sessionPlaintextBytes || plaintext[0] != browserSessionVersion {
 		return Principal{}, ErrUnauthenticated
 	}
-	expiresAt := time.Unix(int64(binary.BigEndian.Uint64(plaintext[17:25])), 0).UTC()
+	expiryUnix, err := strconv.ParseInt(strings.TrimLeft(string(plaintext[17:37]), "\x00"), 10, 64)
+	if err != nil || expiryUnix <= 0 {
+		return Principal{}, ErrUnauthenticated
+	}
+	expiresAt := time.Unix(expiryUnix, 0).UTC()
 	if !m.now().UTC().Before(expiresAt) {
 		return Principal{}, ErrUnauthenticated
 	}
-	scopes, err := ScopeSetFromMask(binary.BigEndian.Uint32(plaintext[25:29]))
+	scopes, err := ScopeSetFromMask(binary.BigEndian.Uint32(plaintext[37:41]))
 	if err != nil || !scopes.Has(required...) {
 		if err == nil {
 			return Principal{}, ErrForbidden
@@ -148,7 +156,7 @@ func (m *BrowserSessionManager) Authenticate(ctx context.Context, cookieValue, c
 			return Principal{}, ErrCSRF
 		}
 		digest := digestCSRF(csrf)
-		if subtle.ConstantTimeCompare(digest[:], plaintext[29:]) != 1 {
+		if subtle.ConstantTimeCompare(digest[:], plaintext[41:]) != 1 {
 			return Principal{}, ErrCSRF
 		}
 	}

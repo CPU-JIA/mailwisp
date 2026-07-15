@@ -60,7 +60,6 @@ type Compatibility struct {
 type BrowserSession struct {
 	Key      []byte
 	Lifetime time.Duration
-	Secure   bool
 }
 
 // Cleanup contains bounded retention settings.
@@ -113,10 +112,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	duckMailEnabled, err := parseBoolean("DUCKMAIL_ENABLED", false)
-	if err != nil {
-		return Config{}, err
-	}
-	browserSessionSecure, err := parseBoolean("BROWSER_SESSION_SECURE", true)
 	if err != nil {
 		return Config{}, err
 	}
@@ -179,7 +174,6 @@ func Load() (Config, error) {
 		BrowserSession: BrowserSession{
 			Key:      browserSessionKey,
 			Lifetime: duration("BROWSER_SESSION_LIFETIME", 12*time.Hour),
-			Secure:   browserSessionSecure,
 		},
 		Cleanup:         Cleanup{BatchSize: integer("CLEANUP_BATCH_SIZE", 100)},
 		LogLevel:        logLevel,

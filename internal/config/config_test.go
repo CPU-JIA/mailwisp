@@ -42,7 +42,7 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
-	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour || !cfg.BrowserSession.Secure {
+	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour {
 		t.Fatalf("BrowserSession defaults = %+v", cfg.BrowserSession)
 	}
 	if cfg.Cleanup.BatchSize != 100 {
@@ -145,7 +145,6 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"DUCKMAIL_ENABLED",
 		"BROWSER_SESSION_KEY",
 		"BROWSER_SESSION_LIFETIME",
-		"BROWSER_SESSION_SECURE",
 		"CLEANUP_BATCH_SIZE",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",

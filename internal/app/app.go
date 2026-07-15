@@ -134,7 +134,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		if err != nil {
 			return nil, fmt.Errorf("create browser session manager: %w", err)
 		}
-		httpServer.SetBrowserSessions(browserSessions, cfg.BrowserSession.Secure)
+		httpServer.SetBrowserSessions(browserSessions)
 	}
 	if cfg.Compatibility.DuckMailEnabled {
 		duckMailRepository, err := postgres.NewDuckMailRepository(pool)

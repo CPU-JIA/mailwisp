@@ -54,7 +54,6 @@ type Server struct {
 	mailbox          MailboxService
 	authenticator    CapabilityAuthenticator
 	browserSessions  *auth.BrowserSessionManager
-	secureCookies    bool
 	limiter          *createLimiter
 	trustedProxies   []*net.IPNet
 	duckMail         *duckmail.Service
@@ -124,9 +123,8 @@ func (s *Server) SetMailboxService(service MailboxService, authenticator Capabil
 }
 
 // SetBrowserSessions enables same-origin HttpOnly Cookie authentication.
-func (s *Server) SetBrowserSessions(manager *auth.BrowserSessionManager, secureCookies bool) {
+func (s *Server) SetBrowserSessions(manager *auth.BrowserSessionManager) {
 	s.browserSessions = manager
-	s.secureCookies = secureCookies
 }
 
 // SetDuckMailService enables the isolated DuckMail compatibility namespace.
@@ -248,8 +246,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, request *http.Reques
 		writeMappedError(w, request, err)
 		return
 	}
-	s.setSessionCookies(w, session)
-	writeJSON(w, http.StatusCreated, map[string]any{"data": map[string]any{"inbox": inbox, "expires_at": session.ExpiresAt}})
+	s.setSessionCookie(w, session)
+	writeJSON(w, http.StatusCreated, map[string]any{"data": map[string]any{"inbox": inbox, "expires_at": session.ExpiresAt, "csrf_token": session.CSRFToken}})
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, request *http.Request) {
@@ -262,14 +260,20 @@ func (s *Server) handleGetSession(w http.ResponseWriter, request *http.Request) 
 		writeMappedError(w, request, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"inbox": inbox, "expires_at": principal.ExpiresAt}})
+	rotated, err := s.browserSessions.Issue(request.Context(), principal)
+	if err != nil {
+		writeMappedError(w, request, err)
+		return
+	}
+	s.setSessionCookie(w, rotated)
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"inbox": inbox, "expires_at": rotated.ExpiresAt, "csrf_token": rotated.CSRFToken}})
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, request *http.Request) {
 	if _, ok := s.requireBrowserPrincipal(w, request, true, auth.ScopeInboxRead); !ok {
 		return
 	}
-	s.clearSessionCookies(w)
+	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -282,7 +286,7 @@ func (s *Server) handleDeleteInbox(w http.ResponseWriter, request *http.Request)
 		writeMappedError(w, request, err)
 		return
 	}
-	s.clearSessionCookies(w)
+	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -375,7 +379,7 @@ func (s *Server) requireBrowserPrincipal(w http.ResponseWriter, request *http.Re
 		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability or browser session is required")
 		return auth.Principal{}, false
 	}
-	cookie, err := request.Cookie(s.sessionCookieName())
+	cookie, err := request.Cookie("__Host-mailwisp_session")
 	if err != nil || cookie.Value == "" {
 		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability or browser session is required")
 		return auth.Principal{}, false
@@ -389,39 +393,13 @@ func (s *Server) requireBrowserPrincipal(w http.ResponseWriter, request *http.Re
 	return principal, true
 }
 
-func (s *Server) setSessionCookies(w http.ResponseWriter, session auth.BrowserSession) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, session auth.BrowserSession) {
 	maxAge := max(1, int(time.Until(session.ExpiresAt).Seconds()))
-	http.SetCookie(w, &http.Cookie{Name: s.sessionCookieName(), Value: session.CookieValue, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: s.secureCookies, HttpOnly: true, SameSite: http.SameSiteLaxMode})
-	http.SetCookie(w, &http.Cookie{Name: s.csrfCookieName(), Value: session.CSRFToken, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: s.secureCookies, HttpOnly: false, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "__Host-mailwisp_session", Value: session.CookieValue, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
-func (s *Server) clearSessionCookies(w http.ResponseWriter) {
-	for _, cookie := range []*http.Cookie{
-		{Name: s.sessionCookieName(), HttpOnly: true},
-		{Name: s.csrfCookieName()},
-	} {
-		cookie.Value = ""
-		cookie.Path = "/"
-		cookie.MaxAge = -1
-		cookie.Expires = time.Unix(1, 0)
-		cookie.Secure = s.secureCookies
-		cookie.SameSite = http.SameSiteLaxMode
-		http.SetCookie(w, cookie)
-	}
-}
-
-func (s *Server) sessionCookieName() string {
-	if s.secureCookies {
-		return "__Host-mailwisp_session"
-	}
-	return "mailwisp_session"
-}
-
-func (s *Server) csrfCookieName() string {
-	if s.secureCookies {
-		return "__Host-mailwisp_csrf"
-	}
-	return "mailwisp_csrf"
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: "__Host-mailwisp_session", Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(1, 0), Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 }
 
 func parseMessageID(raw string) (message.MessageID, error) {
