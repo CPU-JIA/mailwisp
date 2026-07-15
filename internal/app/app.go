@@ -12,12 +12,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"mailwisp/internal/auth"
 	"mailwisp/internal/config"
 	"mailwisp/internal/contentstore"
 	"mailwisp/internal/httpapi"
 	"mailwisp/internal/jobs"
 	"mailwisp/internal/lmtp"
 	"mailwisp/internal/mail"
+	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
 	"mailwisp/internal/postgres"
 )
@@ -31,6 +33,7 @@ type App struct {
 	pool         *pgxpool.Pool
 	repository   *postgres.DeliveryRepository
 	parserWorker *jobs.ParserWorker
+	mailbox      *mailbox.Service
 }
 
 type serviceResult struct {
@@ -70,6 +73,26 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create content parse repository: %w", err)
 	}
+	capabilityRepository, err := postgres.NewInboxCapabilityRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("create Inbox capability repository: %w", err)
+	}
+	capabilityService, err := auth.NewCapabilityService(capabilityRepository)
+	if err != nil {
+		return nil, fmt.Errorf("create Inbox capability service: %w", err)
+	}
+	mailboxRepository, err := postgres.NewMailboxRepository(pool)
+	if err != nil {
+		return nil, fmt.Errorf("create Inbox repository: %w", err)
+	}
+	mailboxService, err := mailbox.NewService(mailboxRepository, capabilityService, store, mailbox.Options{
+		PublicDomains: cfg.Inbox.PublicDomains,
+		DefaultTTL:    cfg.Inbox.DefaultTTL,
+		MaxTTL:        cfg.Inbox.MaxTTL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create Inbox service: %w", err)
+	}
 	parserLimits := mail.DefaultLimits()
 	parserLimits.MaxRawBytes = cfg.LMTP.MaxMessageBytes
 	parser, err := mail.NewParser(parserLimits)
@@ -104,6 +127,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	}
 	httpServer := httpapi.NewServer(cfg.HTTP, logger)
 	httpServer.SetReadinessChecker(repository)
+	httpServer.SetMailboxService(mailboxService, capabilityService)
 
 	cleanupPool = false
 	return &App{
@@ -114,6 +138,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		pool:         pool,
 		repository:   repository,
 		parserWorker: parserWorker,
+		mailbox:      mailboxService,
 	}, nil
 }
 

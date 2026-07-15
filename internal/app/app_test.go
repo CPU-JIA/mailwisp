@@ -24,7 +24,7 @@ func TestNewComposesApplicationWithoutConnecting(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	application.pool.Close()
-	if application.http == nil || application.lmtp == nil || application.repository == nil || application.parserWorker == nil {
+	if application.http == nil || application.lmtp == nil || application.repository == nil || application.parserWorker == nil || application.mailbox == nil {
 		t.Fatal("New() did not compose all required services")
 	}
 }
@@ -109,13 +109,15 @@ func testConfig(t *testing.T) config.Config {
 	t.Helper()
 	return config.Config{
 		HTTP: config.HTTP{
-			Addr:              "127.0.0.1:0",
-			ReadHeaderTimeout: time.Second,
-			ReadTimeout:       time.Second,
-			WriteTimeout:      time.Second,
-			IdleTimeout:       time.Second,
-			MaxHeaderBytes:    8 << 10,
-			ReadinessTimeout:  time.Second,
+			Addr:                "127.0.0.1:0",
+			ReadHeaderTimeout:   time.Second,
+			ReadTimeout:         time.Second,
+			WriteTimeout:        time.Second,
+			IdleTimeout:         time.Second,
+			MaxHeaderBytes:      8 << 10,
+			ReadinessTimeout:    time.Second,
+			CreateRatePerMinute: 60,
+			CreateRateBurst:     10,
 		},
 		LMTP: config.LMTP{
 			Addr:             "127.0.0.1:0",
@@ -146,6 +148,11 @@ func testConfig(t *testing.T) config.Config {
 		Content: config.Content{
 			Root:     filepath.Join(t.TempDir(), "content"),
 			MaxBytes: 1 << 20,
+		},
+		Inbox: config.Inbox{
+			PublicDomains: []string{"mailwisp.test"},
+			DefaultTTL:    time.Hour,
+			MaxTTL:        24 * time.Hour,
 		},
 		LogLevel:        slog.LevelInfo,
 		ShutdownTimeout: time.Second,

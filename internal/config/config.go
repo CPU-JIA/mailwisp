@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -20,19 +21,30 @@ type Config struct {
 	Parser          Parser
 	Postgres        Postgres
 	Content         Content
+	Inbox           Inbox
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 }
 
 // HTTP contains public HTTP server limits and timeouts.
 type HTTP struct {
-	Addr              string
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	MaxHeaderBytes    int
-	ReadinessTimeout  time.Duration
+	Addr                string
+	ReadHeaderTimeout   time.Duration
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
+	MaxHeaderBytes      int
+	ReadinessTimeout    time.Duration
+	CreateRatePerMinute int
+	CreateRateBurst     int
+	TrustedProxyCIDRs   []string
+}
+
+// Inbox contains public anonymous Inbox lifecycle settings.
+type Inbox struct {
+	PublicDomains []string
+	DefaultTTL    time.Duration
+	MaxTTL        time.Duration
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -82,13 +94,16 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		HTTP: HTTP{
-			Addr:              value("HTTP_ADDR", ":8080"),
-			ReadHeaderTimeout: duration("READ_HEADER_TIMEOUT", 5*time.Second),
-			ReadTimeout:       duration("READ_TIMEOUT", 10*time.Second),
-			WriteTimeout:      duration("WRITE_TIMEOUT", 15*time.Second),
-			IdleTimeout:       duration("IDLE_TIMEOUT", 60*time.Second),
-			MaxHeaderBytes:    integer("MAX_HEADER_BYTES", 1<<20),
-			ReadinessTimeout:  duration("READINESS_TIMEOUT", 2*time.Second),
+			Addr:                value("HTTP_ADDR", ":8080"),
+			ReadHeaderTimeout:   duration("READ_HEADER_TIMEOUT", 5*time.Second),
+			ReadTimeout:         duration("READ_TIMEOUT", 10*time.Second),
+			WriteTimeout:        duration("WRITE_TIMEOUT", 15*time.Second),
+			IdleTimeout:         duration("IDLE_TIMEOUT", 60*time.Second),
+			MaxHeaderBytes:      integer("MAX_HEADER_BYTES", 1<<20),
+			ReadinessTimeout:    duration("READINESS_TIMEOUT", 2*time.Second),
+			CreateRatePerMinute: integer("CREATE_RATE_PER_MINUTE", 12),
+			CreateRateBurst:     integer("CREATE_RATE_BURST", 4),
+			TrustedProxyCIDRs:   commaSeparated("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"),
 		},
 		LMTP: LMTP{
 			Addr:             value("LMTP_ADDR", "127.0.0.1:2525"),
@@ -119,6 +134,11 @@ func Load() (Config, error) {
 		Content: Content{
 			Root:     value("CONTENT_ROOT", "./data/content"),
 			MaxBytes: integer64("CONTENT_MAX_BYTES", 25<<20),
+		},
+		Inbox: Inbox{
+			PublicDomains: commaSeparated("PUBLIC_DOMAINS", "mailwisp.local"),
+			DefaultTTL:    duration("INBOX_DEFAULT_TTL", 24*time.Hour),
+			MaxTTL:        duration("INBOX_MAX_TTL", 7*24*time.Hour),
 		},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
@@ -153,6 +173,17 @@ func (c Config) Validate() error {
 	}
 	if c.HTTP.ReadinessTimeout <= 0 || c.HTTP.ReadinessTimeout > 10*time.Second {
 		errs = append(errs, errors.New("MAILWISP_READINESS_TIMEOUT must be between 1ns and 10s"))
+	}
+	if c.HTTP.CreateRatePerMinute <= 0 || c.HTTP.CreateRatePerMinute > 10000 {
+		errs = append(errs, errors.New("MAILWISP_CREATE_RATE_PER_MINUTE must be between 1 and 10000"))
+	}
+	if c.HTTP.CreateRateBurst <= 0 || c.HTTP.CreateRateBurst > c.HTTP.CreateRatePerMinute {
+		errs = append(errs, errors.New("MAILWISP_CREATE_RATE_BURST must be positive and not exceed MAILWISP_CREATE_RATE_PER_MINUTE"))
+	}
+	for _, cidr := range c.HTTP.TrustedProxyCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			errs = append(errs, fmt.Errorf("MAILWISP_TRUSTED_PROXY_CIDRS contains invalid CIDR %q", cidr))
+		}
 	}
 	if strings.TrimSpace(c.LMTP.Addr) == "" {
 		errs = append(errs, errors.New("MAILWISP_LMTP_ADDR must not be empty"))
@@ -220,6 +251,23 @@ func (c Config) Validate() error {
 	if c.Content.MaxBytes < c.LMTP.MaxMessageBytes {
 		errs = append(errs, errors.New("MAILWISP_CONTENT_MAX_BYTES must be at least MAILWISP_LMTP_MAX_MESSAGE_BYTES"))
 	}
+	if len(c.Inbox.PublicDomains) == 0 {
+		errs = append(errs, errors.New("MAILWISP_PUBLIC_DOMAINS must contain at least one domain"))
+	}
+	seenDomains := make(map[string]struct{}, len(c.Inbox.PublicDomains))
+	for _, domain := range c.Inbox.PublicDomains {
+		if !validDomain(domain) {
+			errs = append(errs, fmt.Errorf("MAILWISP_PUBLIC_DOMAINS contains invalid domain %q", domain))
+			continue
+		}
+		if _, exists := seenDomains[domain]; exists {
+			errs = append(errs, fmt.Errorf("MAILWISP_PUBLIC_DOMAINS contains duplicate domain %q", domain))
+		}
+		seenDomains[domain] = struct{}{}
+	}
+	if c.Inbox.DefaultTTL <= 0 || c.Inbox.MaxTTL <= 0 || c.Inbox.DefaultTTL > c.Inbox.MaxTTL {
+		errs = append(errs, errors.New("MAILWISP_INBOX_DEFAULT_TTL and MAILWISP_INBOX_MAX_TTL must define a positive ordered range"))
+	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("MAILWISP_SHUTDOWN_TIMEOUT must be positive"))
 	}
@@ -231,6 +279,36 @@ func value(name, fallback string) string {
 		return raw
 	}
 	return fallback
+}
+
+func commaSeparated(name, fallback string) []string {
+	raw := value(name, fallback)
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if normalized := strings.ToLower(strings.TrimSpace(part)); normalized != "" {
+			values = append(values, normalized)
+		}
+	}
+	return values
+}
+
+func validDomain(domain string) bool {
+	if len(domain) < 3 || len(domain) > 253 || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func duration(name string, fallback time.Duration) time.Duration {
