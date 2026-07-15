@@ -1,0 +1,3 @@
+# Disable smtpd chroot so the explicitly copied TLS material and local LMTP
+# network path remain predictable on the Reference Profile.
+smtp      inet  n       -       n       -       -       smtpd

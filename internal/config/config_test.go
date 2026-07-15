@@ -45,6 +45,9 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour || !cfg.BrowserSession.Secure {
 		t.Fatalf("BrowserSession defaults = %+v", cfg.BrowserSession)
 	}
+	if cfg.Cleanup.BatchSize != 100 {
+		t.Fatalf("Cleanup defaults = %+v", cfg.Cleanup)
+	}
 }
 
 func TestLoadRejectsInvalidLimits(t *testing.T) {
@@ -143,6 +146,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"BROWSER_SESSION_KEY",
 		"BROWSER_SESSION_LIFETIME",
 		"BROWSER_SESSION_SECURE",
+		"CLEANUP_BATCH_SIZE",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",
 		"LMTP_MAX_MESSAGE_BYTES",

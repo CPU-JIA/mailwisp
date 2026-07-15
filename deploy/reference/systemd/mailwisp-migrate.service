@@ -1,0 +1,19 @@
+[Unit]
+Description=MailWisp database migration
+After=postgresql.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mailwisp
+Group=mailwisp
+WorkingDirectory=/var/lib/mailwisp
+EnvironmentFile=/etc/mailwisp/mailwisp.env
+ExecStart=/usr/local/bin/mailwisp migrate
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mailwisp
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true

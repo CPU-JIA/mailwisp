@@ -25,6 +25,7 @@ type Config struct {
 	Inbox           Inbox
 	Compatibility   Compatibility
 	BrowserSession  BrowserSession
+	Cleanup         Cleanup
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 }
@@ -60,6 +61,11 @@ type BrowserSession struct {
 	Key      []byte
 	Lifetime time.Duration
 	Secure   bool
+}
+
+// Cleanup contains bounded retention settings.
+type Cleanup struct {
+	BatchSize int
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -175,6 +181,7 @@ func Load() (Config, error) {
 			Lifetime: duration("BROWSER_SESSION_LIFETIME", 12*time.Hour),
 			Secure:   browserSessionSecure,
 		},
+		Cleanup:         Cleanup{BatchSize: integer("CLEANUP_BATCH_SIZE", 100)},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
@@ -311,6 +318,9 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("MAILWISP_SHUTDOWN_TIMEOUT must be positive"))
+	}
+	if c.Cleanup.BatchSize <= 0 || c.Cleanup.BatchSize > 1000 {
+		errs = append(errs, errors.New("MAILWISP_CLEANUP_BATCH_SIZE must be between 1 and 1000"))
 	}
 	return errors.Join(errs...)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,6 +15,8 @@ import (
 	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
 )
+
+const cleanupAdvisoryLockID int64 = 0x4d575350434c4e50
 
 // MailboxRepository persists Inbox lifecycle and ownership-scoped message access.
 type MailboxRepository struct {
@@ -302,6 +305,88 @@ func (r *MailboxRepository) GetMessageContent(ctx context.Context, inboxID messa
 		return message.ContentRef{}, fmt.Errorf("read Inbox message content: %w", err)
 	}
 	return ref, nil
+}
+
+// CleanupExpiredInboxes deletes one bounded, single-runner batch and returns
+// Raw MIME objects whose final database reference was removed.
+func (r *MailboxRepository) CleanupExpiredInboxes(ctx context.Context, batchSize int) (int, []message.ContentRef, error) {
+	if batchSize <= 0 || batchSize > 1000 {
+		return 0, nil, errors.New("cleanup batch size must be between 1 and 1000")
+	}
+	transaction, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, nil, fmt.Errorf("begin expired Inbox cleanup: %w", err)
+	}
+	defer rollbackTransaction(transaction)
+	var locked bool
+	if err := transaction.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock($1)", cleanupAdvisoryLockID).Scan(&locked); err != nil {
+		return 0, nil, fmt.Errorf("acquire cleanup advisory lock: %w", err)
+	}
+	if !locked {
+		if err := transaction.Commit(ctx); err != nil {
+			return 0, nil, fmt.Errorf("finish skipped cleanup: %w", err)
+		}
+		return 0, []message.ContentRef{}, nil
+	}
+	rows, err := transaction.Query(ctx, `
+		SELECT id
+		FROM inboxes
+		WHERE expires_at IS NOT NULL
+		  AND expires_at <= now()
+		ORDER BY expires_at, id
+		FOR UPDATE SKIP LOCKED
+		LIMIT $1
+	`, batchSize)
+	if err != nil {
+		return 0, nil, fmt.Errorf("select expired Inbox batch: %w", err)
+	}
+	inboxIDs, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return 0, nil, fmt.Errorf("collect expired Inbox batch: %w", err)
+	}
+	if len(inboxIDs) == 0 {
+		if err := transaction.Commit(ctx); err != nil {
+			return 0, nil, fmt.Errorf("finish empty cleanup: %w", err)
+		}
+		return 0, []message.ContentRef{}, nil
+	}
+	contentRows, err := transaction.Query(ctx, `
+		SELECT content.content_key, content.size_bytes
+		FROM messages AS owned
+		JOIN mail_contents AS content ON content.content_key = owned.content_key
+		WHERE owned.inbox_id = ANY($1::uuid[])
+		GROUP BY content.content_key, content.size_bytes
+		ORDER BY content.content_key
+	`, inboxIDs)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read expired Inbox content: %w", err)
+	}
+	refs, err := pgx.CollectRows(contentRows, pgx.RowToStructByPos[message.ContentRef])
+	if err != nil {
+		return 0, nil, fmt.Errorf("collect expired Inbox content: %w", err)
+	}
+	tag, err := transaction.Exec(ctx, "DELETE FROM inboxes WHERE id = ANY($1::uuid[])", inboxIDs)
+	if err != nil {
+		return 0, nil, fmt.Errorf("delete expired Inboxes: %w", err)
+	}
+	orphans := make([]message.ContentRef, 0, len(refs))
+	for _, ref := range refs {
+		contentTag, err := transaction.Exec(ctx, `
+			DELETE FROM mail_contents AS content
+			WHERE content.content_key = $1
+			  AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.content_key = content.content_key)
+		`, ref.Key)
+		if err != nil {
+			return 0, nil, fmt.Errorf("delete expired unreferenced content: %w", err)
+		}
+		if contentTag.RowsAffected() == 1 {
+			orphans = append(orphans, ref)
+		}
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return 0, nil, fmt.Errorf("commit expired Inbox cleanup: %w", err)
+	}
+	return int(tag.RowsAffected()), orphans, nil
 }
 
 // DeleteMessage removes one owned message and returns newly unreferenced Raw MIME.

@@ -1,0 +1,32 @@
+compatibility_level = 3.11
+myhostname = MAILWISP_SMTP_HOST
+myorigin = $myhostname
+mydestination =
+inet_interfaces = all
+inet_protocols = all
+
+relay_domains = MAILWISP_MAIL_DOMAIN
+transport_maps = hash:/etc/postfix/mailwisp_transport
+
+smtpd_banner = $myhostname ESMTP
+disable_vrfy_command = yes
+smtpd_helo_required = yes
+smtpd_delay_reject = yes
+smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+
+message_size_limit = 26214400
+smtpd_client_connection_count_limit = 20
+smtpd_client_connection_rate_limit = 30
+smtpd_client_message_rate_limit = 60
+anvil_rate_time_unit = 60s
+
+smtpd_tls_security_level = may
+smtpd_tls_cert_file = /etc/postfix/tls/mailwisp-fullchain.pem
+smtpd_tls_key_file = /etc/postfix/tls/mailwisp-privkey.pem
+smtpd_tls_protocols = >=TLSv1.2
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_received_header = yes
+smtp_tls_security_level = may
+
+maillog_file = /var/log/postfix/mail.log
