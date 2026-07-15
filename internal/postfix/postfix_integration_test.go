@@ -106,6 +106,7 @@ func testTemporaryFailureRetries(t *testing.T, postfix *postfixFixture, lmtpPort
 	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
 	first := receiver.next(t)
 	assertAttempt(t, first, testEnvelopeSender, raw)
+	waitForContainerLog(t, postfix.container, queueID, "status=deferred")
 	waitForQueueID(t, postfix.container, queueID, true)
 
 	flushQueue(t, postfix.container)
@@ -135,6 +136,7 @@ func testLostAcknowledgementDuplicates(t *testing.T, postfix *postfixFixture, lm
 	raw := rawMessage("lost-ack", "Lost acknowledgement", "commit succeeds before acknowledgement is lost")
 	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
 	first := repository.next(t)
+	waitForContainerLog(t, postfix.container, queueID, "status=deferred")
 	waitForQueueID(t, postfix.container, queueID, true)
 
 	flushQueue(t, postfix.container)
