@@ -1,0 +1,74 @@
+name: Compose Benchmark
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-benchmark-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-compose:
+    name: Linux Compose regression benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: go1.26.5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install pinned Docker Compose
+        shell: bash
+        run: |
+          compose_version="$(awk -F= '$1 == "MAILWISP_DOCKER_COMPOSE" { print $2 }' deploy/compose/versions.lock)"
+          compose_sha256="$(awk -F= '$1 == "MAILWISP_DOCKER_COMPOSE_LINUX_X86_64_SHA256" { print $2 }' deploy/compose/versions.lock)"
+          test -n "$compose_version"
+          test -n "$compose_sha256"
+          install -d -m 0755 "$HOME/.docker/cli-plugins"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            "https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-x86_64" \
+            --output "$HOME/.docker/cli-plugins/docker-compose"
+          echo "${compose_sha256}  $HOME/.docker/cli-plugins/docker-compose" \
+            | sha256sum --check --strict
+          chmod 0755 "$HOME/.docker/cli-plugins/docker-compose"
+          test "$(docker compose version --short)" = "$compose_version"
+
+      - name: Run bounded Compose regression benchmark
+        shell: pwsh
+        run: |
+          ./scripts/benchmark-compose.ps1 `
+            -OutputDirectory artifacts/compose-benchmark-ci `
+            -Concurrency 1,4,16,32 `
+            -HTTPReadRequests 1000 `
+            -HTTPCreateRequests 100 `
+            -LMTPRequests 100 `
+            -LMTPPayloadBytes 8192
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compose-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/compose-benchmark-ci
+          if-no-files-found: error
+          retention-days: 14

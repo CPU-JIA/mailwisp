@@ -29,7 +29,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("ShutdownTimeout = %v, want %v", cfg.ShutdownTimeout, 10*time.Second)
 	}
-	if cfg.LMTP.Addr != "127.0.0.1:2525" || cfg.LMTP.MaxMessageBytes != 25<<20 {
+	if cfg.LMTP.Addr != "127.0.0.1:2525" || cfg.LMTP.MaxMessageBytes != 25<<20 || cfg.LMTP.MaxSessions != 64 {
 		t.Fatalf("LMTP defaults = %+v", cfg.LMTP)
 	}
 	if cfg.Parser.Workers != 2 || cfg.Parser.ParseTimeout != 30*time.Second || cfg.Parser.LeaseDuration != time.Minute {

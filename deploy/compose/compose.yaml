@@ -24,7 +24,7 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     tmpfs:
       - /run/postgresql:size=16m,mode=0770
     healthcheck:
