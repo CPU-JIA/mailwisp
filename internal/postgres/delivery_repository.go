@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mailwisp/internal/message"
@@ -20,10 +23,18 @@ var (
 
 // DeliveryRepository atomically writes content metadata and recipient message rows.
 type DeliveryRepository struct {
-	pool *pgxpool.Pool
+	pool          *pgxpool.Pool
+	limits        DeliveryLimits
+	enforceLimits bool
 	// commitObserver is an unexported deterministic crash-test seam.
 	// Production composition never assigns it.
 	commitObserver func(deliveryCommitStage)
+}
+
+// DeliveryLimits bounds logical storage consumed by one active Inbox.
+type DeliveryLimits struct {
+	MaxInboxMessages     int
+	MaxInboxStorageBytes int64
 }
 
 type deliveryCommitStage string
@@ -39,6 +50,17 @@ func NewDeliveryRepository(pool *pgxpool.Pool) (*DeliveryRepository, error) {
 		return nil, errors.New("postgres pool is required")
 	}
 	return &DeliveryRepository{pool: pool}, nil
+}
+
+// NewDeliveryRepositoryWithLimits constructs a quota-enforcing delivery repository.
+func NewDeliveryRepositoryWithLimits(pool *pgxpool.Pool, limits DeliveryLimits) (*DeliveryRepository, error) {
+	if pool == nil {
+		return nil, errors.New("postgres pool is required")
+	}
+	if limits.MaxInboxMessages <= 0 || limits.MaxInboxStorageBytes <= 0 {
+		return nil, errors.New("delivery Inbox limits must be positive")
+	}
+	return &DeliveryRepository{pool: pool, limits: limits, enforceLimits: true}, nil
 }
 
 // Ready verifies that PostgreSQL can serve a short request.
@@ -58,6 +80,48 @@ func (r *DeliveryRepository) Ready(ctx context.Context) error {
 
 // ResolveInbox finds an active, unexpired inbox by canonical address.
 func (r *DeliveryRepository) ResolveInbox(ctx context.Context, address string) (message.InboxID, error) {
+	return r.ResolveInboxForDelivery(ctx, address, 0)
+}
+
+// ResolveInboxForDelivery resolves a recipient and rejects an already-full Inbox before DATA.
+func (r *DeliveryRepository) ResolveInboxForDelivery(ctx context.Context, address string, declaredSize int64) (message.InboxID, error) {
+	if declaredSize < 0 {
+		return "", message.ErrInvalidDelivery
+	}
+	if !r.enforceLimits {
+		return r.resolveInbox(ctx, address)
+	}
+	var inboxID string
+	var messageCount int
+	var storageBytes int64
+	err := r.pool.QueryRow(ctx, `
+		SELECT inbox.id::text,
+		       count(message.id),
+		       COALESCE(sum(content.size_bytes), 0)
+		FROM inboxes AS inbox
+		LEFT JOIN messages AS message ON message.inbox_id = inbox.id
+		LEFT JOIN mail_contents AS content ON content.content_key = message.content_key
+		WHERE inbox.address = $1
+		  AND inbox.status = 'active'
+		  AND (inbox.expires_at IS NULL OR inbox.expires_at > now())
+		GROUP BY inbox.id
+	`, address).Scan(&inboxID, &messageCount, &storageBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", message.ErrInboxNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve Inbox quota by address: %w", err)
+	}
+	if messageCount >= r.limits.MaxInboxMessages {
+		return "", message.ErrInboxMessageQuotaExceeded
+	}
+	if storageBytes >= r.limits.MaxInboxStorageBytes || declaredSize > r.limits.MaxInboxStorageBytes-storageBytes {
+		return "", message.ErrInboxStorageQuotaExceeded
+	}
+	return message.InboxID(inboxID), nil
+}
+
+func (r *DeliveryRepository) resolveInbox(ctx context.Context, address string) (message.InboxID, error) {
 	var inboxID string
 	err := r.pool.QueryRow(ctx, `
 		SELECT id::text
@@ -90,6 +154,11 @@ func (r *DeliveryRepository) CommitDelivery(ctx context.Context, delivery messag
 		defer cancel()
 		_ = transaction.Rollback(rollbackContext)
 	}()
+	if r.enforceLimits {
+		if err := r.lockAndCheckDeliveryRecipients(ctx, transaction, delivery); err != nil {
+			return nil, err
+		}
+	}
 
 	tag, err := transaction.Exec(ctx, `
 		INSERT INTO mail_contents (content_key, size_bytes)
@@ -136,6 +205,73 @@ func (r *DeliveryRepository) CommitDelivery(ctx context.Context, delivery messag
 	}
 	r.observeCommit(deliveryCommitStageAfter)
 	return stored, nil
+}
+
+func (r *DeliveryRepository) lockAndCheckDeliveryRecipients(ctx context.Context, transaction pgx.Tx, delivery message.Delivery) error {
+	recipientUUIDs := make([]pgtype.UUID, 0, len(delivery.Recipients))
+	for _, inboxID := range delivery.Recipients {
+		parsed, err := uuid.Parse(string(inboxID))
+		if err != nil {
+			return message.ErrInvalidDelivery
+		}
+		recipientUUIDs = append(recipientUUIDs, pgtype.UUID{Bytes: parsed, Valid: true})
+	}
+	sort.Slice(recipientUUIDs, func(left, right int) bool { return recipientUUIDs[left].String() < recipientUUIDs[right].String() })
+	rows, err := transaction.Query(ctx, `
+		SELECT id::text
+		FROM inboxes
+		WHERE id = ANY($1::uuid[])
+		  AND status = 'active'
+		  AND (expires_at IS NULL OR expires_at > now())
+		ORDER BY id
+		FOR UPDATE
+	`, recipientUUIDs)
+	if err != nil {
+		return fmt.Errorf("lock delivery recipients: %w", err)
+	}
+	locked, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("collect locked delivery recipients: %w", err)
+	}
+	if len(locked) != len(delivery.Recipients) {
+		return message.ErrInboxNotFound
+	}
+
+	rows, err = transaction.Query(ctx, `
+		SELECT message.inbox_id::text,
+		       count(message.id),
+		       COALESCE(sum(content.size_bytes), 0)
+		FROM messages AS message
+		JOIN mail_contents AS content ON content.content_key = message.content_key
+		WHERE message.inbox_id = ANY($1::uuid[])
+		GROUP BY message.inbox_id
+	`, recipientUUIDs)
+	if err != nil {
+		return fmt.Errorf("read delivery recipient quotas: %w", err)
+	}
+	type usage struct {
+		InboxID      string
+		MessageCount int
+		StorageBytes int64
+	}
+	usageRows, err := pgx.CollectRows(rows, pgx.RowToStructByPos[usage])
+	if err != nil {
+		return fmt.Errorf("collect delivery recipient quotas: %w", err)
+	}
+	byInbox := make(map[string]usage, len(usageRows))
+	for _, current := range usageRows {
+		byInbox[current.InboxID] = current
+	}
+	for _, inboxID := range delivery.Recipients {
+		current := byInbox[string(inboxID)]
+		if current.MessageCount >= r.limits.MaxInboxMessages {
+			return message.ErrInboxMessageQuotaExceeded
+		}
+		if delivery.Content.SizeBytes > r.limits.MaxInboxStorageBytes-current.StorageBytes {
+			return message.ErrInboxStorageQuotaExceeded
+		}
+	}
+	return nil
 }
 
 func (r *DeliveryRepository) observeCommit(stage deliveryCommitStage) {

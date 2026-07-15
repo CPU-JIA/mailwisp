@@ -18,7 +18,7 @@ import (
 
 // InboxResolver resolves canonical recipient addresses before DATA is accepted.
 type InboxResolver interface {
-	ResolveInbox(context.Context, string) (message.InboxID, error)
+	ResolveInboxForDelivery(context.Context, string, int64) (message.InboxID, error)
 }
 
 // MessageReceiver durably receives one accepted LMTP transaction.
@@ -32,6 +32,7 @@ type Metrics interface {
 	LMTPSessionClosed()
 	LMTPSessionRejected()
 	ObserveLMTPDelivery(int)
+	ObserveLMTPQuotaRejected(string)
 }
 
 // Options configures LMTP resource limits and deadlines.

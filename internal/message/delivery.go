@@ -18,6 +18,10 @@ var (
 	ErrInboxNotFound = errors.New("inbox not found")
 	// ErrContentTooLarge indicates that raw message content exceeds the configured limit.
 	ErrContentTooLarge = errors.New("message content too large")
+	// ErrInboxMessageQuotaExceeded indicates that one recipient reached its message-count limit.
+	ErrInboxMessageQuotaExceeded = errors.New("inbox message quota exceeded")
+	// ErrInboxStorageQuotaExceeded indicates that one recipient reached its logical byte limit.
+	ErrInboxStorageQuotaExceeded = errors.New("inbox storage quota exceeded")
 )
 
 const sha256HexLength = 64

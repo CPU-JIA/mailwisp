@@ -454,7 +454,7 @@ func newStaticResolver(address string) *staticResolver {
 	return &staticResolver{acceptedAddress: strings.ToLower(address), inboxID: message.InboxID(uuid.NewString())}
 }
 
-func (r *staticResolver) ResolveInbox(_ context.Context, address string) (message.InboxID, error) {
+func (r *staticResolver) ResolveInboxForDelivery(_ context.Context, address string, _ int64) (message.InboxID, error) {
 	if strings.ToLower(address) == r.acceptedAddress {
 		return r.inboxID, nil
 	}

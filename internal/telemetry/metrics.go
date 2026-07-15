@@ -13,36 +13,38 @@ import (
 
 // Metrics owns MailWisp's bounded-cardinality Prometheus registry.
 type Metrics struct {
-	registry         *prometheus.Registry
-	httpRequests     *prometheus.CounterVec
-	httpDuration     *prometheus.HistogramVec
-	lmtpActive       prometheus.Gauge
-	lmtpRejected     prometheus.Counter
-	lmtpDeliveries   *prometheus.CounterVec
-	parserRuns       *prometheus.CounterVec
-	parserDuration   *prometheus.HistogramVec
-	retentionSweeps  *prometheus.CounterVec
-	retentionDeleted *prometheus.CounterVec
+	registry          *prometheus.Registry
+	httpRequests      *prometheus.CounterVec
+	httpDuration      *prometheus.HistogramVec
+	lmtpActive        prometheus.Gauge
+	lmtpRejected      prometheus.Counter
+	lmtpDeliveries    *prometheus.CounterVec
+	lmtpQuotaRejected *prometheus.CounterVec
+	parserRuns        *prometheus.CounterVec
+	parserDuration    *prometheus.HistogramVec
+	retentionSweeps   *prometheus.CounterVec
+	retentionDeleted  *prometheus.CounterVec
 }
 
 // NewMetrics creates an isolated registry without global mutable collectors.
 func NewMetrics(pool *pgxpool.Pool) *Metrics {
 	metrics := &Metrics{
-		registry:         prometheus.NewRegistry(),
-		httpRequests:     prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_http_requests_total", Help: "Completed HTTP requests."}, []string{"method", "route", "status"}),
-		httpDuration:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "mailwisp_http_request_duration_seconds", Help: "HTTP request duration.", Buckets: prometheus.DefBuckets}, []string{"method", "route"}),
-		lmtpActive:       prometheus.NewGauge(prometheus.GaugeOpts{Name: "mailwisp_lmtp_sessions_active", Help: "Currently active LMTP sessions."}),
-		lmtpRejected:     prometheus.NewCounter(prometheus.CounterOpts{Name: "mailwisp_lmtp_sessions_rejected_total", Help: "LMTP sessions rejected by the concurrency limit."}),
-		lmtpDeliveries:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_lmtp_deliveries_total", Help: "LMTP delivery outcomes by SMTP status class."}, []string{"result"}),
-		parserRuns:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_parser_runs_total", Help: "MIME parser work outcomes."}, []string{"result"}),
-		parserDuration:   prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "mailwisp_parser_duration_seconds", Help: "MIME parser work duration.", Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}}, []string{"result"}),
-		retentionSweeps:  prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_retention_sweeps_total", Help: "Retention sweep outcomes."}, []string{"result"}),
-		retentionDeleted: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_retention_deleted_total", Help: "Objects deleted by retention."}, []string{"kind"}),
+		registry:          prometheus.NewRegistry(),
+		httpRequests:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_http_requests_total", Help: "Completed HTTP requests."}, []string{"method", "route", "status"}),
+		httpDuration:      prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "mailwisp_http_request_duration_seconds", Help: "HTTP request duration.", Buckets: prometheus.DefBuckets}, []string{"method", "route"}),
+		lmtpActive:        prometheus.NewGauge(prometheus.GaugeOpts{Name: "mailwisp_lmtp_sessions_active", Help: "Currently active LMTP sessions."}),
+		lmtpRejected:      prometheus.NewCounter(prometheus.CounterOpts{Name: "mailwisp_lmtp_sessions_rejected_total", Help: "LMTP sessions rejected by the concurrency limit."}),
+		lmtpDeliveries:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_lmtp_deliveries_total", Help: "LMTP delivery outcomes by SMTP status class."}, []string{"result"}),
+		lmtpQuotaRejected: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_lmtp_quota_rejections_total", Help: "LMTP recipient and delivery rejections by bounded quota reason."}, []string{"reason"}),
+		parserRuns:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_parser_runs_total", Help: "MIME parser work outcomes."}, []string{"result"}),
+		parserDuration:    prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "mailwisp_parser_duration_seconds", Help: "MIME parser work duration.", Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}}, []string{"result"}),
+		retentionSweeps:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_retention_sweeps_total", Help: "Retention sweep outcomes."}, []string{"result"}),
+		retentionDeleted:  prometheus.NewCounterVec(prometheus.CounterOpts{Name: "mailwisp_retention_deleted_total", Help: "Objects deleted by retention."}, []string{"kind"}),
 	}
 	metrics.registry.MustRegister(
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		metrics.httpRequests, metrics.httpDuration, metrics.lmtpActive, metrics.lmtpRejected,
-		metrics.lmtpDeliveries, metrics.parserRuns, metrics.parserDuration, metrics.retentionSweeps, metrics.retentionDeleted,
+		metrics.lmtpDeliveries, metrics.lmtpQuotaRejected, metrics.parserRuns, metrics.parserDuration, metrics.retentionSweeps, metrics.retentionDeleted,
 	)
 	if pool != nil {
 		metrics.registerPostgresPool(pool)
@@ -82,6 +84,14 @@ func (m *Metrics) ObserveLMTPDelivery(status int) {
 		result = "permanent_failure"
 	}
 	m.lmtpDeliveries.WithLabelValues(result).Inc()
+}
+
+// ObserveLMTPQuotaRejected records one fixed Inbox quota reason.
+func (m *Metrics) ObserveLMTPQuotaRejected(reason string) {
+	if reason != "messages" && reason != "storage_bytes" {
+		return
+	}
+	m.lmtpQuotaRejected.WithLabelValues(reason).Inc()
 }
 
 // ObserveParser records one fixed parser result label.

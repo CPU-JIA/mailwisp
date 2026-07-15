@@ -20,6 +20,15 @@ sudo chown -R 65532:65532 backups
 
 编辑`.env`中的Web域名、SMTP Host、收件域名和证书名称；编辑`mailwisp.env`中的公开域名与LMTP Host。Browser Session Key通过独立Docker Secret文件注入，不写入普通环境变量或Git。
 
+`mailwisp.env`默认把每个Inbox限制为500条Message和256 MiB逻辑存储：
+
+```dotenv
+MAILWISP_INBOX_MAX_MESSAGES=500
+MAILWISP_INBOX_MAX_STORAGE_BYTES=268435456
+```
+
+逻辑存储按Inbox中的每条Message累计Raw MIME大小，不按Content Store物理去重后的磁盘大小计算。该限制用于隔离单Inbox滥用，不替代主机磁盘水位监控。
+
 DNS至少包含Web/SMTP Host的A/AAAA记录和收件域名MX记录，云厂商必须允许公网25端口。
 
 ## 2. 首次证书
@@ -92,6 +101,7 @@ docker compose run --rm app restore /backups/<bundle-directory>
 - `curl --fail https://mail.example.com/readyz`；
 - 浏览器完成创建、Session/Token、收件、正文、附件与删除流程；
 - 外部SMTP投递后可从API读取，未知Recipient永久失败，过载返回临时失败；
+- Inbox达到Message或逻辑存储配额后返回`552 5.2.2`，且多Recipient投递不产生部分写入；
 - `openssl s_client -starttls smtp -connect mx.example.com:25 -servername mx.example.com`；
 - 强制重启App后Postfix Queue能够重投；
 - 证书Dry Run、备份恢复、Content Reconciliation与断电恢复演练通过。

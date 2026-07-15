@@ -27,6 +27,7 @@ type session struct {
 	greeted      bool
 	mailSet      bool
 	sender       string
+	declaredSize int64
 	recipients   []recipient
 	recipientSet map[message.InboxID]struct{}
 }
@@ -93,6 +94,7 @@ func (s *session) run(ctx context.Context) error {
 				continue
 			}
 			s.sender = sender
+			s.declaredSize = declaredSize
 			s.mailSet = true
 			s.recipientSet = make(map[message.InboxID]struct{})
 			if err := s.reply(250, "2.1.0", "Sender OK"); err != nil {
@@ -113,7 +115,7 @@ func (s *session) run(ctx context.Context) error {
 				continue
 			}
 			resolveContext, cancel := context.WithTimeout(ctx, s.server.options.DeliveryTimeout)
-			inboxID, resolveErr := s.server.resolver.ResolveInbox(resolveContext, address)
+			inboxID, resolveErr := s.server.resolver.ResolveInboxForDelivery(resolveContext, address, s.declaredSize)
 			cancel()
 			if errors.Is(resolveErr, message.ErrInboxNotFound) {
 				if err := s.reply(550, "5.1.1", "Recipient address rejected"); err != nil {
@@ -122,6 +124,15 @@ func (s *session) run(ctx context.Context) error {
 				continue
 			}
 			if resolveErr != nil {
+				if reason := quotaRejectionReason(resolveErr); reason != "" {
+					if s.server.metrics != nil {
+						s.server.metrics.ObserveLMTPQuotaRejected(reason)
+					}
+					if err := s.reply(552, "5.2.2", "Recipient Inbox quota exceeded"); err != nil {
+						return err
+					}
+					continue
+				}
 				if err := s.reply(451, "4.3.0", "Temporary recipient lookup failure"); err != nil {
 					return err
 				}
@@ -213,6 +224,9 @@ func (s *session) receiveData(ctx context.Context) error {
 	code, enhanced, text := classifyDeliveryError(receiveErr)
 	if s.server.metrics != nil {
 		s.server.metrics.ObserveLMTPDelivery(code)
+		if reason := quotaRejectionReason(receiveErr); reason != "" {
+			s.server.metrics.ObserveLMTPQuotaRejected(reason)
+		}
 	}
 	for _, recipient := range s.recipients {
 		if err := s.reply(code, enhanced, recipient.address+" "+text); err != nil {
@@ -233,10 +247,25 @@ func classifyDeliveryError(err error) (int, string, string) {
 		return 554, "5.6.0", "message line too long"
 	case errors.Is(err, message.ErrInboxNotFound):
 		return 550, "5.1.1", "recipient no longer available"
+	case errors.Is(err, message.ErrInboxMessageQuotaExceeded):
+		return 552, "5.2.2", "recipient message quota exceeded"
+	case errors.Is(err, message.ErrInboxStorageQuotaExceeded):
+		return 552, "5.2.2", "recipient storage quota exceeded"
 	case errors.Is(err, message.ErrInvalidDelivery):
 		return 554, "5.6.0", "invalid delivery"
 	default:
 		return 451, "4.3.0", "temporary delivery failure"
+	}
+}
+
+func quotaRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, message.ErrInboxMessageQuotaExceeded):
+		return "messages"
+	case errors.Is(err, message.ErrInboxStorageQuotaExceeded):
+		return "storage_bytes"
+	default:
+		return ""
 	}
 }
 
@@ -276,6 +305,7 @@ func (s *session) reply(code int, enhanced, text string) error {
 func (s *session) resetTransaction() {
 	s.mailSet = false
 	s.sender = ""
+	s.declaredSize = 0
 	s.recipients = nil
 	s.recipientSet = nil
 }
