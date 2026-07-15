@@ -90,7 +90,7 @@ func (s *issuerStub) Issue(_ context.Context, inboxID message.InboxID, scopes au
 	if s.err != nil {
 		return auth.IssuedCapability{}, s.err
 	}
-	return auth.IssuedCapability{InboxID: inboxID, Plaintext: "wisp_cap_v1_0123456789abcdef01234567_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Scopes: scopes, ExpiresAt: expiresAt}, nil
+	return auth.IssuedCapability{InboxID: inboxID, Plaintext: "test-capability-placeholder", Scopes: scopes, ExpiresAt: expiresAt}, nil
 }
 
 type contentStub struct{}
