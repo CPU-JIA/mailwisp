@@ -204,11 +204,12 @@ docs/decisions/      Architecture Decision Record
 
 - Canonical Opaque Token必须遵循ADR 0005的`wisp_<type>_v1_<kid>_<secret>`语法；兼容Adapter不得反向污染Canonical认证模型。
 - Token使用 `crypto/rand` 生成，熵不得低于256 bit。
-- Token明文只展示一次；数据库只保存Domain-separated Digest、非秘密Kid、Type、Scope与生命周期状态。
+- Bearer Token明文只展示一次；数据库只保存Domain-separated Digest、非秘密Kid、Type、Scope与生命周期状态。
 - 适用时使用Constant-time Comparison。
 - Scope检查默认拒绝。
 - Token Rotation必须在一个原子操作中使旧Token失效。
 - V1不得签发永久PAT或不可撤销JWT Bearer Token。
+- Webhook Signing Secret等服务端必须使用的Key Material不得套用不可逆Bearer Digest存储，必须通过独立ADR确定加密存储或主密钥派生边界。
 - 管理Secret不得出现在日志中。
 - Web Console优先使用 Secure、HttpOnly、SameSite Cookie，降低XSS窃取风险。
 - 登录、注册、域名提交和高成本查询必须限流。
@@ -411,6 +412,8 @@ govulncheck ./...
 - PR标题遵循Conventional Commits风格。
 - PR描述默认中文，至少包含：目标、主要改动、风险、数据/迁移影响、验证命令与结果、回滚方式。
 - CI未通过、Review未完成或迁移未验证时不得合并。
+- 用户已将本仓库日常研发全闭环授权给Codex；Codex负责调研与决策、分支、实现、测试、Commit、Push、PR、GitHub Actions、Review处理、修复、Draft转Ready、Stack合并顺序、实际合并、后续Base同步、已完成任务分支清理与证据收尾，无需在每个常规环节再次请求确认。
+- 上述授权不降低任何门禁，也不扩大到生产部署、DNS、真实Secret、仓库权限或其他高风险外部系统变更；存在未解决Review、失败检查、未验证Migration、安全边界不清或Base漂移时必须继续保持Draft或暂停合并。
 - 合并策略优先Squash Merge，保持 `main` 历史清晰；需要保留独立Commit语义时再使用Merge Commit。
 - 合并后才删除已完成的远程任务分支，并遵守仓库设置。
 
