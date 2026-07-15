@@ -2,6 +2,8 @@ package config
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -45,7 +47,7 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour {
 		t.Fatalf("BrowserSession defaults = %+v", cfg.BrowserSession)
 	}
-	if cfg.Cleanup.BatchSize != 100 {
+	if cfg.Cleanup.BatchSize != 100 || cfg.Cleanup.Interval != 5*time.Minute || cfg.Cleanup.Timeout != 2*time.Minute {
 		t.Fatalf("Cleanup defaults = %+v", cfg.Cleanup)
 	}
 }
@@ -87,10 +89,41 @@ func TestLoadBrowserSessionKey(t *testing.T) {
 	}
 }
 
+func TestLoadBrowserSessionKeyFile(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	path := filepath.Join(t.TempDir(), "browser-session-key")
+	if err := os.WriteFile(path, []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"BROWSER_SESSION_KEY_FILE", path)
+	cfg, err := Load()
+	if err != nil || len(cfg.BrowserSession.Key) != 32 {
+		t.Fatalf("Load() key length = %d, error = %v", len(cfg.BrowserSession.Key), err)
+	}
+}
+
 func TestLoadRequiresPostgresDSN(t *testing.T) {
 	clearConfigurationEnvironment(t)
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want missing PostgreSQL DSN error")
+	}
+}
+
+func TestLoadPostgresPasswordFile(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	path := filepath.Join(t.TempDir(), "postgres-password")
+	if err := os.WriteFile(path, []byte("p@ss word\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"POSTGRES_PASSWORD_FILE", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Postgres.DSN != "postgres://mailwisp:p%40ss%20word@postgres:5432/mailwisp?sslmode=disable" {
+		t.Fatalf("Postgres.DSN = %q", cfg.Postgres.DSN)
 	}
 }
 
@@ -144,8 +177,11 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
 		"BROWSER_SESSION_KEY",
+		"BROWSER_SESSION_KEY_FILE",
 		"BROWSER_SESSION_LIFETIME",
 		"CLEANUP_BATCH_SIZE",
+		"CLEANUP_INTERVAL",
+		"CLEANUP_TIMEOUT",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",
 		"LMTP_MAX_MESSAGE_BYTES",
@@ -163,6 +199,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"PARSER_RETRY_BASE",
 		"PARSER_RETRY_MAX",
 		"POSTGRES_DSN",
+		"POSTGRES_PASSWORD_FILE",
 		"POSTGRES_MIN_CONNECTIONS",
 		"POSTGRES_MAX_CONNECTIONS",
 		"POSTGRES_CONNECT_TIMEOUT",

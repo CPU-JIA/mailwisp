@@ -38,9 +38,12 @@ if (Test-Path -LiteralPath $artifactRoot) {
 }
 $bundleRoot = Join-Path $artifactRoot 'mailwisp-linux-amd64'
 $webRoot = Join-Path $bundleRoot 'web'
-$deployRoot = Join-Path $bundleRoot 'deploy/reference'
+$deployRoot = Join-Path $bundleRoot 'deploy'
+$hostDeployRoot = Join-Path $deployRoot 'host'
+$composeDeployRoot = Join-Path $deployRoot 'compose'
 New-Item -ItemType Directory -Force -Path $webRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $deployRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $hostDeployRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $composeDeployRoot | Out-Null
 
 $previousGoOS = $env:GOOS
 $previousGoArch = $env:GOARCH
@@ -58,8 +61,13 @@ try {
 
 Copy-Item -Path (Join-Path $repositoryRoot 'web/dist/*') -Destination $webRoot -Recurse -Force
 foreach ($entry in @('README.md', 'versions.lock', 'certbot', 'nginx', 'postfix', 'systemd')) {
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot "deploy/reference/$entry") -Destination $deployRoot -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "deploy/reference/$entry") -Destination $hostDeployRoot -Recurse -Force
 }
+foreach ($entry in @('README.md', 'versions.lock', 'Dockerfile', 'compose.yaml', '.env.example', 'mailwisp.env.example', 'nginx', 'postfix')) {
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot "deploy/compose/$entry") -Destination $composeDeployRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $composeDeployRoot 'secrets') | Out-Null
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'deploy/compose/secrets/README.md') -Destination (Join-Path $composeDeployRoot 'secrets')
 
 $checksums = Get-ChildItem -LiteralPath $bundleRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
     $relative = [System.IO.Path]::GetRelativePath($bundleRoot, $_.FullName).Replace('\', '/')

@@ -1,6 +1,6 @@
-# MailWisp Reference Deployment
+# MailWisp Host-native辅助部署
 
-本Profile面向一台长期运行的Linux个人服务器。公网只开放`25/tcp`、`80/tcp`和`443/tcp`；Go HTTP、LMTP与PostgreSQL只监听本机。版本目标见`versions.lock`，升级必须通过PR更新Lock和验证证据。
+本Profile面向希望使用systemd深度集成的一台长期运行Linux个人服务器。Docker Compose是主推荐部署方式；Host-native保留为辅助选择。公网只开放`25/tcp`、`80/tcp`和`443/tcp`；Go HTTP、LMTP与PostgreSQL只监听本机。版本目标见`versions.lock`，升级必须通过PR更新Lock和验证证据。
 
 ## 1. DNS与主机名
 
@@ -56,6 +56,8 @@ MAILWISP_CONTENT_MAX_BYTES=26214400
 MAILWISP_BROWSER_SESSION_KEY=<base64-encoded-32-byte-secret>
 MAILWISP_BROWSER_SESSION_LIFETIME=12h
 MAILWISP_CLEANUP_BATCH_SIZE=100
+MAILWISP_CLEANUP_INTERVAL=0s
+MAILWISP_CLEANUP_TIMEOUT=2m
 MAILWISP_DUCKMAIL_ENABLED=false
 ```
 

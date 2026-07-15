@@ -5,9 +5,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +68,8 @@ type BrowserSession struct {
 // Cleanup contains bounded retention settings.
 type Cleanup struct {
 	BatchSize int
+	Interval  time.Duration
+	Timeout   time.Duration
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -115,7 +120,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	browserSessionKey, err := decodeSecretKey("BROWSER_SESSION_KEY")
+	postgresDSN, err := postgresDSNWithPasswordFile(value("POSTGRES_DSN", ""), strings.TrimSpace(os.Getenv(prefix+"POSTGRES_PASSWORD_FILE")))
+	if err != nil {
+		return Config{}, err
+	}
+	browserSessionKey, err := browserSessionKeyFromEnvironment()
 	if err != nil {
 		return Config{}, err
 	}
@@ -154,7 +163,7 @@ func Load() (Config, error) {
 			RetryMax:      duration("PARSER_RETRY_MAX", 5*time.Minute),
 		},
 		Postgres: Postgres{
-			DSN:            value("POSTGRES_DSN", ""),
+			DSN:            postgresDSN,
 			MinConnections: integer32("POSTGRES_MIN_CONNECTIONS", 1),
 			MaxConnections: integer32("POSTGRES_MAX_CONNECTIONS", 10),
 			ConnectTimeout: duration("POSTGRES_CONNECT_TIMEOUT", 5*time.Second),
@@ -175,7 +184,11 @@ func Load() (Config, error) {
 			Key:      browserSessionKey,
 			Lifetime: duration("BROWSER_SESSION_LIFETIME", 12*time.Hour),
 		},
-		Cleanup:         Cleanup{BatchSize: integer("CLEANUP_BATCH_SIZE", 100)},
+		Cleanup: Cleanup{
+			BatchSize: integer("CLEANUP_BATCH_SIZE", 100),
+			Interval:  duration("CLEANUP_INTERVAL", 5*time.Minute),
+			Timeout:   duration("CLEANUP_TIMEOUT", 2*time.Minute),
+		},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
@@ -316,6 +329,12 @@ func (c Config) Validate() error {
 	if c.Cleanup.BatchSize <= 0 || c.Cleanup.BatchSize > 1000 {
 		errs = append(errs, errors.New("MAILWISP_CLEANUP_BATCH_SIZE must be between 1 and 1000"))
 	}
+	if c.Cleanup.Interval < 0 || c.Cleanup.Interval > 24*time.Hour {
+		errs = append(errs, errors.New("MAILWISP_CLEANUP_INTERVAL must be between 0 and 24h"))
+	}
+	if c.Cleanup.Interval > 0 && (c.Cleanup.Timeout <= 0 || c.Cleanup.Timeout >= c.Cleanup.Interval) {
+		errs = append(errs, errors.New("MAILWISP_CLEANUP_TIMEOUT must be positive and shorter than MAILWISP_CLEANUP_INTERVAL"))
+	}
 	return errors.Join(errs...)
 }
 
@@ -418,10 +437,80 @@ func decodeSecretKey(name string) ([]byte, error) {
 	return nil, fmt.Errorf("MAILWISP_%s must be base64 or base64url", name)
 }
 
+func browserSessionKeyFromEnvironment() ([]byte, error) {
+	keyFile := strings.TrimSpace(os.Getenv(prefix + "BROWSER_SESSION_KEY_FILE"))
+	keyValue := strings.TrimSpace(os.Getenv(prefix + "BROWSER_SESSION_KEY"))
+	if keyFile != "" && keyValue != "" {
+		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY and MAILWISP_BROWSER_SESSION_KEY_FILE must not both be configured")
+	}
+	if keyFile == "" {
+		return decodeSecretKey("BROWSER_SESSION_KEY")
+	}
+	raw, err := readConfiguredFile(keyFile, 4096)
+	if err != nil {
+		return nil, fmt.Errorf("read MAILWISP_BROWSER_SESSION_KEY_FILE: %w", err)
+	}
+	if len(raw) > 4096 {
+		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must not exceed 4096 bytes")
+	}
+	value := strings.TrimSpace(string(raw))
+	if value == "" {
+		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must not be empty")
+	}
+	for _, encoding := range []*base64.Encoding{base64.RawURLEncoding.Strict(), base64.StdEncoding.Strict()} {
+		decoded, decodeErr := encoding.DecodeString(value)
+		if decodeErr == nil {
+			if len(decoded) != 32 {
+				return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must decode to exactly 32 bytes")
+			}
+			return decoded, nil
+		}
+	}
+	return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must contain base64 or base64url")
+}
+
 func parseLogLevel(raw string) (slog.Level, error) {
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(raw)); err != nil {
 		return 0, fmt.Errorf("MAILWISP_LOG_LEVEL: %w", err)
 	}
 	return level, nil
+}
+
+func postgresDSNWithPasswordFile(dsn, passwordFile string) (string, error) {
+	if passwordFile == "" {
+		return dsn, nil
+	}
+	passwordBytes, err := readConfiguredFile(passwordFile, 4096)
+	if err != nil {
+		return "", fmt.Errorf("read MAILWISP_POSTGRES_PASSWORD_FILE: %w", err)
+	}
+	password := strings.TrimSpace(string(passwordBytes))
+	if password == "" || len(passwordBytes) > 4096 || strings.ContainsRune(password, '\x00') {
+		return "", errors.New("MAILWISP_POSTGRES_PASSWORD_FILE must contain 1 to 4096 non-NUL bytes")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Scheme == "" || parsed.User == nil || parsed.User.Username() == "" {
+		return "", errors.New("MAILWISP_POSTGRES_DSN must be a URL with a username when password file is configured")
+	}
+	parsed.User = url.UserPassword(parsed.User.Username(), password)
+	return parsed.String(), nil
+}
+
+func readConfiguredFile(path string, maxBytes int64) ([]byte, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(filepath.Dir(absolute))
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := root.Open(filepath.Base(absolute))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(io.LimitReader(file, maxBytes+1))
 }

@@ -166,6 +166,34 @@ try {
         Invoke-Native -Name 'Postfix LMTP integration race tests' -Command { go test -race -tags=integration ./internal/postfix -count=1 }
         Invoke-Native -Name 'postgres integration tests' -Command { go test -tags=integration ./internal/postgres -count=1 }
         Invoke-Native -Name 'postgres integration race tests' -Command { go test -race -tags=integration ./internal/postgres -count=1 }
+
+        $composeFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("mailwisp-compose-" + [guid]::NewGuid().ToString('N'))
+        [System.IO.Directory]::CreateDirectory($composeFixtureRoot) | Out-Null
+        try {
+            $composeEnvironment = Join-Path $composeFixtureRoot 'mailwisp.env'
+            $composePassword = Join-Path $composeFixtureRoot 'postgres_password.txt'
+            [System.IO.File]::WriteAllText($composeEnvironment, "MAILWISP_PUBLIC_DOMAINS=example.com`nMAILWISP_LMTP_HOSTNAME=mx.example.com`n")
+            [System.IO.File]::WriteAllText($composePassword, "compose-verification-password`n")
+            $env:MAILWISP_ENV_FILE = $composeEnvironment
+            $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $composePassword
+            $env:MAILWISP_WEB_DOMAIN = 'mail.example.com'
+            $env:MAILWISP_SMTP_HOST = 'mx.example.com'
+            $env:MAILWISP_MAIL_DOMAIN = 'example.com'
+            $env:MAILWISP_CERT_NAME = 'mail.example.com'
+            $composeFile = Join-Path $repositoryRoot 'deploy/compose/compose.yaml'
+            Invoke-Native -Name 'Docker Compose render' -Command { docker compose --profile tools -f $composeFile config --quiet }
+            Invoke-Native -Name 'Docker Compose production images' -Command { docker compose -f $composeFile build --pull app edge postfix }
+        } finally {
+            Remove-Item Env:MAILWISP_ENV_FILE -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_WEB_DOMAIN -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_SMTP_HOST -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_MAIL_DOMAIN -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_CERT_NAME -ErrorAction SilentlyContinue
+            if ([System.IO.Directory]::Exists($composeFixtureRoot)) {
+                [System.IO.Directory]::Delete($composeFixtureRoot, $true)
+            }
+        }
     } else {
         throw 'Docker未安装，PostgreSQL Integration验证不得跳过。'
     }

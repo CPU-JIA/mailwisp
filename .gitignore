@@ -9,6 +9,10 @@
 data/
 backups/
 artifacts/
+deploy/compose/backups/
+deploy/compose/mailwisp.env
+deploy/compose/secrets/*
+!deploy/compose/secrets/README.md
 *.dump
 *.sql.gz
 *.eml

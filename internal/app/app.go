@@ -34,6 +34,7 @@ type App struct {
 	pool         *pgxpool.Pool
 	repository   *postgres.DeliveryRepository
 	parserWorker *jobs.ParserWorker
+	retention    *jobs.Retention
 	mailbox      *mailbox.Service
 }
 
@@ -112,6 +113,17 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create parser worker: %w", err)
 	}
+	var retention *jobs.Retention
+	if cfg.Cleanup.Interval > 0 {
+		retention, err = jobs.NewRetention(mailboxRepository, store, logger, jobs.RetentionOptions{
+			BatchSize: cfg.Cleanup.BatchSize,
+			Interval:  cfg.Cleanup.Interval,
+			Timeout:   cfg.Cleanup.Timeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create retention job: %w", err)
+		}
+	}
 	lmtpReceiver := &wakingReceiver{receiver: receiver, wake: parserWorker.Notify}
 	lmtpServer, err := lmtp.NewServer(lmtp.Options{
 		Hostname:         cfg.LMTP.Hostname,
@@ -161,6 +173,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		pool:         pool,
 		repository:   repository,
 		parserWorker: parserWorker,
+		retention:    retention,
 		mailbox:      mailboxService,
 	}, nil
 }
@@ -194,7 +207,11 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 
 	serviceContext, cancelServices := context.WithCancel(ctx)
 	defer cancelServices()
-	results := make(chan serviceResult, 3)
+	serviceCount := 3
+	if a.retention != nil {
+		serviceCount++
+	}
+	results := make(chan serviceResult, serviceCount)
 	go func() {
 		results <- serviceResult{name: "http", err: a.http.ListenAndServe()}
 	}()
@@ -204,6 +221,11 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 	go func() {
 		results <- serviceResult{name: "parser", err: a.parserWorker.Run(serviceContext)}
 	}()
+	if a.retention != nil {
+		go func() {
+			results <- serviceResult{name: "retention", err: a.retention.Run(serviceContext)}
+		}()
+	}
 	a.http.SetReady(true)
 
 	var runError error
@@ -229,7 +251,7 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 		_ = a.http.Close()
 	}
 
-	for receivedResults < 3 {
+	for receivedResults < serviceCount {
 		select {
 		case result := <-results:
 			receivedResults++

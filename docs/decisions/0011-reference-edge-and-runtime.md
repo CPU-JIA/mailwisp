@@ -1,15 +1,15 @@
 # ADR 0011：Reference Profile采用Nginx、Certbot与Host-native服务
 
-状态：已接受
+状态：部分取代；Host-native技术选择仍有效，默认Profile排序由ADR 0013取代
 日期：2026-07-15
 
 ## 背景
 
-MailWisp需要同时处理HTTPS和公网SMTP TLS。只比较Web反向代理的配置长度会忽略Postfix证书共享、续签Reload和故障排查。Reference Profile面向一名维护者和单台Linux服务器，空闲资源、恢复路径和可预测运维比提前容器编排更重要。
+MailWisp需要同时处理HTTPS和公网SMTP TLS。只比较Web反向代理的配置长度会忽略Postfix证书共享、续签Reload和故障排查。本ADR保留Host-native辅助Profile的技术选择；主推荐部署已由ADR 0013调整为Docker Compose。
 
 ## 决策
 
-- Reference OS为长期支持Linux，服务使用systemd管理；Go应用、Nginx、Postfix和PostgreSQL直接运行在Host，不要求Docker常驻。
+- Host-native辅助Profile使用长期支持Linux与systemd；Go应用、Nginx、Postfix和PostgreSQL直接运行在Host。
 - Web Edge选择Nginx 1.30.3稳定线。Certbot 5.6.0使用Webroot签发同时覆盖Web与SMTP Host的证书。
 - Nginx直接读取Let’s Encrypt证书；Certbot Deploy Hook把证书原子安装到`/etc/postfix/tls`后先执行配置检查，再Reload Nginx和Postfix。
 - Postfix只负责公网SMTP、持久Queue、TLS与LMTP重投；Go应用继续只监听Loopback HTTP和LMTP。
