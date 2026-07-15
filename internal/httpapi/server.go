@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/config"
@@ -35,6 +36,11 @@ type ReadinessChecker interface {
 // HTTPMetrics observes bounded route patterns and durations.
 type HTTPMetrics interface {
 	ObserveHTTPRequest(method, route string, status int, duration time.Duration)
+}
+
+// InboxCreateQuota persists one UTC-day creation allowance per private client identity.
+type InboxCreateQuota interface {
+	Consume(context.Context, string) (abuse.Decision, error)
 }
 
 // MailboxService is the canonical Inbox and message application boundary.
@@ -64,6 +70,7 @@ type Server struct {
 	authenticator             CapabilityAuthenticator
 	browserSessions           *auth.BrowserSessionManager
 	limiter                   *createLimiter
+	createQuota               InboxCreateQuota
 	trustedProxies            []*net.IPNet
 	duckMail                  *duckmail.Service
 	yyds                      *yyds.Service
@@ -172,6 +179,9 @@ func (s *Server) SetMailboxService(service MailboxService, authenticator Capabil
 	s.authenticator = authenticator
 }
 
+// SetCreateQuota enables persistent anonymous Inbox creation admission.
+func (s *Server) SetCreateQuota(quota InboxCreateQuota) { s.createQuota = quota }
+
 // SetBrowserSessions enables same-origin HttpOnly Cookie authentication.
 func (s *Server) SetBrowserSessions(manager *auth.BrowserSessionManager) {
 	s.browserSessions = manager
@@ -274,6 +284,16 @@ func (s *Server) handleCreateInbox(w http.ResponseWriter, request *http.Request)
 			return
 		}
 		lifetime = time.Duration(input.TTLSeconds) * time.Second
+	}
+	decision, err := s.consumeCreateQuota(request)
+	setCreateQuotaHeaders(w, decision, err)
+	if errors.Is(err, abuse.ErrDailyCreateQuotaExceeded) {
+		writeError(w, request, http.StatusTooManyRequests, "daily_quota_exceeded", "daily Inbox creation quota exceeded")
+		return
+	}
+	if err != nil {
+		writeError(w, request, http.StatusInternalServerError, "internal_error", "persistent Inbox admission failed")
+		return
 	}
 	created, err := s.mailbox.Create(request.Context(), mailbox.CreateRequest{Domain: input.Domain, Lifetime: lifetime})
 	if err != nil {
@@ -532,6 +552,26 @@ func (s *Server) clientIP(request *http.Request) string {
 		}
 	}
 	return remote
+}
+
+func (s *Server) consumeCreateQuota(request *http.Request) (abuse.Decision, error) {
+	if s.createQuota == nil {
+		return abuse.Decision{}, errors.New("persistent Inbox create quota is not configured")
+	}
+	return s.createQuota.Consume(request.Context(), s.clientIP(request))
+}
+
+func setCreateQuotaHeaders(w http.ResponseWriter, decision abuse.Decision, err error) {
+	if decision.Limit <= 0 || decision.ResetAt.IsZero() {
+		return
+	}
+	w.Header().Set("RateLimit-Limit", strconv.Itoa(decision.Limit))
+	w.Header().Set("RateLimit-Remaining", strconv.Itoa(max(0, decision.Remaining)))
+	resetSeconds := max(1, int(time.Until(decision.ResetAt).Seconds()))
+	w.Header().Set("RateLimit-Reset", strconv.Itoa(resetSeconds))
+	if errors.Is(err, abuse.ErrDailyCreateQuotaExceeded) {
+		w.Header().Set("Retry-After", strconv.Itoa(resetSeconds))
+	}
 }
 
 func writeMappedError(w http.ResponseWriter, request *http.Request, err error) {

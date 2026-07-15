@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/config"
 	"mailwisp/internal/duckmail"
@@ -39,7 +40,9 @@ func TestDuckMailContractAccountTokenAndDomains(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := NewServer(config.HTTP{CreateRatePerMinute: 60, CreateRateBurst: 10}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	quota := &createQuotaStub{}
 	server.SetMailboxService(mailboxes, &authStub{})
+	server.SetCreateQuota(quota)
 	server.SetDuckMailService(service)
 
 	domains := performDuckRequest(server, http.MethodGet, "/compat/duckmail/domains", "", "")
@@ -50,6 +53,12 @@ func TestDuckMailContractAccountTokenAndDomains(t *testing.T) {
 	if account.Code != http.StatusCreated || !strings.Contains(account.Body.String(), `"authType":"email"`) {
 		t.Fatalf("account = %d %s", account.Code, account.Body.String())
 	}
+	quota.err = abuse.ErrDailyCreateQuotaExceeded
+	limited := performDuckRequest(server, http.MethodPost, "/compat/duckmail/accounts", `{"address":"limited@mailwisp.test","password":"secret-password"}`, "")
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("daily quota = %d %s", limited.Code, limited.Body.String())
+	}
+	quota.err = nil
 	token := performDuckRequest(server, http.MethodPost, "/compat/duckmail/token", `{"address":"demo@mailwisp.test","password":"secret-password"}`, "")
 	if token.Code != http.StatusOK || !strings.Contains(token.Body.String(), `"token":"duckmail-http-token"`) {
 		t.Fatalf("token = %d %s", token.Code, token.Body.String())

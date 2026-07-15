@@ -20,6 +20,7 @@ MailWisp通过显式`/compat/yyds/v1`命名空间提供Adapter，默认由`MAILW
 - `GET /sources/{id}` Raw RFC 822数据；
 - Attachment Metadata及Bearer保护的独立下载URL；
 - Stable `errorCode`、主要HTTP状态与Temporary Token Ownership检查。
+- `POST /accounts`和`POST /inboxes`与Canonical创建入口共享瞬时Token Bucket和PostgreSQL UTC日配额；超额保持YYDS Envelope并返回429。
 
 ## Partially Supported
 

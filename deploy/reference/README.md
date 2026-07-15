@@ -52,6 +52,8 @@ MAILWISP_PUBLIC_DOMAINS=example.com
 MAILWISP_INBOX_MAX_MESSAGES=500
 MAILWISP_INBOX_MAX_STORAGE_BYTES=268435456
 MAILWISP_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
+MAILWISP_CREATE_DAILY_LIMIT=100
+MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE=/etc/mailwisp/create-quota-hmac-key
 MAILWISP_POSTGRES_DSN=postgres://mailwisp:<secret>@127.0.0.1:5432/mailwisp?sslmode=require
 MAILWISP_CONTENT_ROOT=/var/lib/mailwisp/content
 MAILWISP_CONTENT_MAX_BYTES=26214400
@@ -68,6 +70,15 @@ MAILWISP_CLOUDFLARE_LEGACY_PATHS_ENABLED=false
 ```
 
 `MAILWISP_CONTENT_MIN_FREE_BYTES`是Content Store文件系统的保留水位；LMTP在DATA前预检，写入前再次预留最大消息窗口。压力状态返回可重试`452 4.3.1`，不得通过降低到单封最大邮件以下来掩盖磁盘不足。
+
+Create Quota HMAC Key必须独立生成，并以`root:mailwisp 0640`保存，确保只有Root与服务进程可读：
+
+```bash
+sudo install -m 0640 -o root -g mailwisp /dev/null /etc/mailwisp/create-quota-hmac-key
+openssl rand -base64 32 | sudo tee /etc/mailwisp/create-quota-hmac-key >/dev/null
+```
+
+数据库只保存客户端IP的HMAC摘要；轮换该Key会重置当日Identity计数。
 
 Browser Session Key必须独立随机生成，例如`openssl rand -base64 32`。Browser Session始终使用Secure `__Host-` Cookie，因此本地纯HTTP开发继续使用内存Capability模式。轮换Key会立即退出所有现有浏览器Session，但不会撤销Canonical Capability。
 

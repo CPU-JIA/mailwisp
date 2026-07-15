@@ -26,6 +26,7 @@ type Config struct {
 	Postgres        Postgres
 	Content         Content
 	Inbox           Inbox
+	CreateQuota     CreateQuota
 	Compatibility   Compatibility
 	BrowserSession  BrowserSession
 	Cleanup         Cleanup
@@ -54,6 +55,12 @@ type Inbox struct {
 	MaxTTL          time.Duration
 	MaxMessages     int
 	MaxStorageBytes int64
+}
+
+// CreateQuota contains persistent anonymous Inbox creation admission settings.
+type CreateQuota struct {
+	DailyLimit int
+	HMACKey    []byte
 }
 
 // Compatibility enables isolated third-party HTTP adapters.
@@ -142,7 +149,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	browserSessionKey, err := browserSessionKeyFromEnvironment()
+	browserSessionKey, err := secretKeyFromEnvironment("BROWSER_SESSION_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+	createQuotaKey, err := secretKeyFromEnvironment("CREATE_QUOTA_HMAC_KEY")
 	if err != nil {
 		return Config{}, err
 	}
@@ -197,6 +208,10 @@ func Load() (Config, error) {
 			MaxTTL:          duration("INBOX_MAX_TTL", 7*24*time.Hour),
 			MaxMessages:     integer("INBOX_MAX_MESSAGES", 500),
 			MaxStorageBytes: integer64("INBOX_MAX_STORAGE_BYTES", 256<<20),
+		},
+		CreateQuota: CreateQuota{
+			DailyLimit: integer("CREATE_DAILY_LIMIT", 100),
+			HMACKey:    createQuotaKey,
 		},
 		Compatibility: Compatibility{
 			DuckMailEnabled:              duckMailEnabled,
@@ -350,6 +365,12 @@ func (c Config) Validate() error {
 	if c.Inbox.MaxStorageBytes < c.LMTP.MaxMessageBytes || c.Inbox.MaxStorageBytes > 1<<50 {
 		errs = append(errs, errors.New("MAILWISP_INBOX_MAX_STORAGE_BYTES must be at least MAILWISP_LMTP_MAX_MESSAGE_BYTES and at most 1125899906842624"))
 	}
+	if c.CreateQuota.DailyLimit <= 0 || c.CreateQuota.DailyLimit > 1_000_000 {
+		errs = append(errs, errors.New("MAILWISP_CREATE_DAILY_LIMIT must be between 1 and 1000000"))
+	}
+	if len(c.CreateQuota.HMACKey) != 0 && len(c.CreateQuota.HMACKey) != 32 {
+		errs = append(errs, errors.New("MAILWISP_CREATE_QUOTA_HMAC_KEY must decode to exactly 32 bytes"))
+	}
 	if c.Compatibility.CloudflareLegacyPathsEnabled && !c.Compatibility.CloudflareTempEnabled {
 		errs = append(errs, errors.New("MAILWISP_CLOUDFLARE_LEGACY_PATHS_ENABLED requires MAILWISP_CLOUDFLARE_TEMP_ENABLED"))
 	}
@@ -473,36 +494,36 @@ func decodeSecretKey(name string) ([]byte, error) {
 	return nil, fmt.Errorf("MAILWISP_%s must be base64 or base64url", name)
 }
 
-func browserSessionKeyFromEnvironment() ([]byte, error) {
-	keyFile := strings.TrimSpace(os.Getenv(prefix + "BROWSER_SESSION_KEY_FILE"))
-	keyValue := strings.TrimSpace(os.Getenv(prefix + "BROWSER_SESSION_KEY"))
+func secretKeyFromEnvironment(name string) ([]byte, error) {
+	keyFile := strings.TrimSpace(os.Getenv(prefix + name + "_FILE"))
+	keyValue := strings.TrimSpace(os.Getenv(prefix + name))
 	if keyFile != "" && keyValue != "" {
-		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY and MAILWISP_BROWSER_SESSION_KEY_FILE must not both be configured")
+		return nil, fmt.Errorf("MAILWISP_%s and MAILWISP_%s_FILE must not both be configured", name, name)
 	}
 	if keyFile == "" {
-		return decodeSecretKey("BROWSER_SESSION_KEY")
+		return decodeSecretKey(name)
 	}
 	raw, err := readConfiguredFile(keyFile, 4096)
 	if err != nil {
-		return nil, fmt.Errorf("read MAILWISP_BROWSER_SESSION_KEY_FILE: %w", err)
+		return nil, fmt.Errorf("read MAILWISP_%s_FILE: %w", name, err)
 	}
 	if len(raw) > 4096 {
-		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must not exceed 4096 bytes")
+		return nil, fmt.Errorf("MAILWISP_%s_FILE must not exceed 4096 bytes", name)
 	}
 	value := strings.TrimSpace(string(raw))
 	if value == "" {
-		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must not be empty")
+		return nil, fmt.Errorf("MAILWISP_%s_FILE must not be empty", name)
 	}
 	for _, encoding := range []*base64.Encoding{base64.RawURLEncoding.Strict(), base64.StdEncoding.Strict()} {
 		decoded, decodeErr := encoding.DecodeString(value)
 		if decodeErr == nil {
 			if len(decoded) != 32 {
-				return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must decode to exactly 32 bytes")
+				return nil, fmt.Errorf("MAILWISP_%s_FILE must decode to exactly 32 bytes", name)
 			}
 			return decoded, nil
 		}
 	}
-	return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must contain base64 or base64url")
+	return nil, fmt.Errorf("MAILWISP_%s_FILE must contain base64 or base64url", name)
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {

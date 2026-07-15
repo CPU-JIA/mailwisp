@@ -5,6 +5,7 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"mailwisp/internal/abuse"
 	backuppkg "mailwisp/internal/backup"
 	"mailwisp/internal/contentstore"
 	"mailwisp/internal/message"
@@ -55,6 +57,16 @@ func TestBackupToolBundleRoundTrip(t *testing.T) {
 		t.Fatalf("EnsureMessageIDs(source) error = %v", err)
 	}
 	compatibilityMessageID := compatibilityMessageIDs[receipt.Messages[0].ID]
+	createQuotaRepository, err := NewCreateQuotaRepository(sourcePool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quotaDigest abuse.IdentityDigest
+	quotaDigest[0] = 7
+	quotaBucket := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	if used, err := createQuotaRepository.ConsumeInboxCreate(context.Background(), quotaDigest, quotaBucket, 2); err != nil || used != 1 {
+		t.Fatalf("ConsumeInboxCreate(source) = %d, %v", used, err)
+	}
 
 	sourceTool, err := NewBackupTool(integrationDataSourceName, sourcePool)
 	if err != nil {
@@ -99,6 +111,16 @@ func TestBackupToolBundleRoundTrip(t *testing.T) {
 	restoredMessageIDs, err := restoredCompatibilityRepository.EnsureMessageIDs(context.Background(), inboxID, []message.MessageID{receipt.Messages[0].ID})
 	if err != nil || restoredMessageIDs[receipt.Messages[0].ID] != compatibilityMessageID {
 		t.Fatalf("EnsureMessageIDs(restored) = %+v, error = %v", restoredMessageIDs, err)
+	}
+	restoredQuotaRepository, err := NewCreateQuotaRepository(restorePool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used, err := restoredQuotaRepository.ConsumeInboxCreate(context.Background(), quotaDigest, quotaBucket, 2); err != nil || used != 2 {
+		t.Fatalf("ConsumeInboxCreate(restored) = %d, %v", used, err)
+	}
+	if _, err := restoredQuotaRepository.ConsumeInboxCreate(context.Background(), quotaDigest, quotaBucket, 2); !errors.Is(err, abuse.ErrDailyCreateQuotaExceeded) {
+		t.Fatalf("ConsumeInboxCreate(restored limit) error = %v", err)
 	}
 
 	restoredStore, err := contentstore.Open(restoredContentRoot, contentstore.Options{MaxBytes: 1 << 20})

@@ -74,9 +74,11 @@ services:
         required: true
     environment:
       <<: *app-environment
+      MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE: /run/secrets/create_quota_hmac_key
     secrets:
       - postgres_password
       - browser_session_key
+      - create_quota_hmac_key
     volumes:
       - content_data:/var/lib/mailwisp/content
       - ./backups:/backups
@@ -192,6 +194,8 @@ secrets:
     file: ${MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE:-./secrets/postgres_password.txt}
   browser_session_key:
     file: ${MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE:-./secrets/browser_session_key.txt}
+  create_quota_hmac_key:
+    file: ${MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE:-./secrets/create_quota_hmac_key.txt}
 
 volumes:
   postgres_data:

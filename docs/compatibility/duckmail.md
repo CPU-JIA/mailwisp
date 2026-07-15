@@ -15,6 +15,7 @@ MailWisp通过显式`/compat/duckmail`命名空间提供Adapter，默认由`MAIL
 - `GET /messages`、`GET /messages/{id}`、`PATCH /messages/{id}`与`DELETE /messages/{id}`；
 - `GET /sources/{id}` Raw RFC 822数据；
 - DuckMail `{error,message}`错误Envelope和主要HTTP状态码。
+- `POST /accounts`与Canonical创建入口共享瞬时Token Bucket和PostgreSQL UTC日配额；默认每个HMAC客户端身份100次/日，超额保持DuckMail错误Envelope并返回429。
 
 ## Partially Supported
 

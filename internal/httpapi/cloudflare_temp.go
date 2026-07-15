@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/mailbox"
@@ -105,6 +106,16 @@ func (s *Server) handleCloudflareTempCreateAddress(w http.ResponseWriter, r *htt
 	}
 	if request.EnableRandomSubdomain {
 		writeCloudflareTempText(w, http.StatusBadRequest, "Random subdomain is not supported")
+		return
+	}
+	decision, err := s.consumeCreateQuota(r)
+	setCreateQuotaHeaders(w, decision, err)
+	if errors.Is(err, abuse.ErrDailyCreateQuotaExceeded) {
+		writeCloudflareTempText(w, http.StatusTooManyRequests, "Daily address quota exceeded")
+		return
+	}
+	if err != nil {
+		writeCloudflareTempText(w, http.StatusInternalServerError, "Persistent address admission failed")
 		return
 	}
 	created, err := s.cloudflareTemp.CreateAddress(r.Context(), request.Name, request.Domain)

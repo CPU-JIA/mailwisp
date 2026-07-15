@@ -12,7 +12,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags='-s -w'
 FROM node:22.20.0-alpine3.22@sha256:dbcedd8aeab47fbc0f4dd4bffa55b7c3c729a707875968d467aaaea42d6225af AS web-build
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm install --global npm@11.15.0 \
+    && npm --version | grep -Fx '11.15.0' \
+    && npm ci
 COPY web/ ./
 RUN npm run build
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/mail"
 	"mailwisp/internal/mailbox"
@@ -54,6 +55,16 @@ func (s *Server) handleYYDSCreateAccount(w http.ResponseWriter, r *http.Request)
 	}
 	if request.WildcardRuleID != "" || request.Subdomain != "" || request.SubdomainLabel != "" {
 		writeYYDSError(w, http.StatusBadRequest, "wildcard_rule_unavailable", "MailWisp未启用YYDS泛子域名兼容")
+		return
+	}
+	decision, err := s.consumeCreateQuota(r)
+	setCreateQuotaHeaders(w, decision, err)
+	if errors.Is(err, abuse.ErrDailyCreateQuotaExceeded) {
+		writeYYDSError(w, http.StatusTooManyRequests, "daily_quota_exceeded", "今日临时邮箱创建额度已用完")
+		return
+	}
+	if err != nil {
+		writeYYDSError(w, http.StatusInternalServerError, "internal_error", "持久化创建准入失败")
 		return
 	}
 	created, err := s.yyds.CreateAccount(r.Context(), yyds.CreateAccountRequest{Address: request.Address, LocalPart: request.LocalPart, Domain: request.Domain})

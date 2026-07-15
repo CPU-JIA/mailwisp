@@ -640,7 +640,7 @@ func newIntegrationRepository(t *testing.T, pool *pgxpool.Pool) *DeliveryReposit
 
 func resetIntegrationDatabase(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), "TRUNCATE messages, mail_contents, inboxes CASCADE"); err != nil {
+	if _, err := pool.Exec(context.Background(), "TRUNCATE inbox_create_quotas, messages, mail_contents, inboxes CASCADE"); err != nil {
 		t.Fatalf("truncate integration database: %v", err)
 	}
 }

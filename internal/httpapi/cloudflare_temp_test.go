@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"mailwisp/internal/abuse"
 	"mailwisp/internal/auth"
 	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/config"
@@ -58,6 +59,13 @@ func TestCloudflareTempContractAddressAndRawMailWorkflow(t *testing.T) {
 	if created.Code != http.StatusOK || !strings.Contains(created.Body.String(), `"address":"demoname@mailwisp.test"`) || !strings.Contains(created.Body.String(), `"address_id":42`) || !strings.Contains(created.Body.String(), `"jwt":"created-capability"`) {
 		t.Fatalf("created = %d %s", created.Code, created.Body.String())
 	}
+	quota := server.createQuota.(*createQuotaStub)
+	quota.err = abuse.ErrDailyCreateQuotaExceeded
+	limited := performCloudflareTempRequest(server, http.MethodPost, "/compat/cloudflare-temp/api/new_address", `{"name":"limited","domain":"mailwisp.test"}`, "")
+	if limited.Code != http.StatusTooManyRequests || limited.Body.String() != "Daily address quota exceeded" {
+		t.Fatalf("daily quota = %d %s", limited.Code, limited.Body.String())
+	}
+	quota.err = nil
 	listed := performCloudflareTempRequest(server, http.MethodGet, "/compat/cloudflare-temp/api/mails?limit=10&offset=0", "", "Bearer current-capability")
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":101`) || !strings.Contains(listed.Body.String(), `"raw":"raw-message"`) || !strings.Contains(listed.Body.String(), `"count":1`) {
 		t.Fatalf("listed = %d %s", listed.Code, listed.Body.String())
@@ -130,6 +138,7 @@ func newCloudflareTempTestServer(t *testing.T, legacyPaths bool) *Server {
 	credentials := &cloudflareTempCredentialStub{}
 	server := NewServer(config.HTTP{CreateRatePerMinute: 60, CreateRateBurst: 10}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	server.SetMailboxService(mailboxes, credentials)
+	server.SetCreateQuota(&createQuotaStub{})
 	server.SetCloudflareTempService(service, legacyPaths)
 	return server
 }
