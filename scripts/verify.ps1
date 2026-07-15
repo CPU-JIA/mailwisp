@@ -190,6 +190,24 @@ try {
     Invoke-Native -Name 'gitleaks working tree scan' -Command { gitleaks dir . --config .gitleaks.toml --no-banner --redact }
     Invoke-Native -Name 'gitleaks git history scan' -Command { gitleaks git --config .gitleaks.toml --no-banner --redact }
 
+    $productionFrontendRoot = Join-Path $repositoryRoot 'web'
+    if (Test-Path -LiteralPath (Join-Path $productionFrontendRoot 'package-lock.json')) {
+        Push-Location -LiteralPath $productionFrontendRoot
+        try {
+            Invoke-Native -Name 'production frontend npm ci' -Command { npm ci }
+            Invoke-Native -Name 'production frontend typecheck' -Command { npm run typecheck }
+            Invoke-Native -Name 'production frontend lint' -Command { npm run lint }
+            Invoke-Native -Name 'production frontend unit tests' -Command { npm test }
+            Invoke-Native -Name 'production frontend build' -Command { npm run build }
+            Invoke-Native -Name 'production frontend browser tests' -Command { npm run test:e2e }
+            Invoke-Native -Name 'production frontend npm audit' -Command { npm audit --audit-level=low }
+        } finally {
+            Pop-Location
+        }
+    } else {
+        throw 'web/package-lock.json不存在，生产前端验证不得跳过。'
+    }
+
     $frontendRoot = Join-Path $repositoryRoot 'spikes/frontend'
     if (Test-Path -LiteralPath (Join-Path $frontendRoot 'package-lock.json')) {
         Push-Location -LiteralPath $frontendRoot
