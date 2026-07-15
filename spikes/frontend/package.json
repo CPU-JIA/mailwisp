@@ -1,0 +1,44 @@
+{
+  "name": "mailwisp-frontend-framework-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": "22.20.0",
+    "npm": "11.15.0"
+  },
+  "scripts": {
+    "build": "npm run build:native && npm run build:vue && npm run build:react && npm run build:svelte",
+    "build:native": "vite build --config vite.native.config.ts",
+    "build:vue": "vite build --config vite.vue.config.ts",
+    "build:react": "vite build --config vite.react.config.ts",
+    "build:svelte": "vite build --config vite.svelte.config.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "npm run typecheck:native && npm run typecheck:vue && npm run typecheck:react && npm run typecheck:svelte",
+    "typecheck:native": "tsc -p native/tsconfig.json",
+    "typecheck:vue": "vue-tsc --noEmit -p vue/tsconfig.json",
+    "typecheck:react": "tsc -p react/tsconfig.json",
+    "typecheck:svelte": "svelte-check --tsconfig ./svelte/tsconfig.json"
+  },
+  "dependencies": {
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "svelte": "5.56.4",
+    "vue": "3.5.39",
+    "vue-i18n": "11.4.6"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@sveltejs/vite-plugin-svelte": "7.2.0",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "@vitejs/plugin-vue": "6.0.7",
+    "svelte-check": "4.7.2",
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vue-tsc": "3.3.7"
+  }
+}

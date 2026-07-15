@@ -21,6 +21,10 @@ coverage.out
 # Frontend artifacts
 web/node_modules/
 web/dist/
+**/node_modules/
+spikes/frontend/dist/
+spikes/frontend/test-results/
+spikes/frontend/playwright-report/
 
 # Editors and operating systems
 .idea/
