@@ -1,0 +1,22 @@
+[Unit]
+Description=MailWisp expired Inbox cleanup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=mailwisp
+Group=mailwisp
+WorkingDirectory=/var/lib/mailwisp
+EnvironmentFile=/etc/mailwisp/mailwisp.env
+ExecStart=/usr/local/bin/mailwisp cleanup
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/mailwisp
+UMask=0077
+

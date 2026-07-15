@@ -237,3 +237,45 @@ func TestMailboxDeleteKeepsContentSharedWithAnotherInbox(t *testing.T) {
 		t.Fatalf("content fixture = %+v, error = %v", stored, err)
 	}
 }
+
+func TestMailboxCleanupDeletesExpiredInBoundedBatches(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	repository, _ := NewMailboxRepository(pool)
+	firstExpiry := time.Now().Add(-2 * time.Hour)
+	secondExpiry := time.Now().Add(-time.Hour)
+	activeExpiry := time.Now().Add(time.Hour)
+	first := createInboxWithState(t, pool, "cleanup-first@mailwisp.test", "active", &firstExpiry)
+	second := createInboxWithState(t, pool, "cleanup-second@mailwisp.test", "active", &secondExpiry)
+	active := createInboxWithState(t, pool, "cleanup-active@mailwisp.test", "active", &activeExpiry)
+	exclusive := message.ContentRef{Key: contentKey("1"), SizeBytes: 1}
+	shared := message.ContentRef{Key: contentKey("2"), SizeBytes: 2}
+	for _, ref := range []message.ContentRef{exclusive, shared} {
+		if _, err := pool.Exec(context.Background(), "INSERT INTO mail_contents (content_key, size_bytes) VALUES ($1, $2)", ref.Key, ref.SizeBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range []struct {
+		inbox message.InboxID
+		ref   message.ContentRef
+	}{{first, exclusive}, {second, shared}, {active, shared}} {
+		if _, err := pool.Exec(context.Background(), `INSERT INTO messages (inbox_id, content_key, envelope_sender, received_at) VALUES ($1::uuid, $2, '', now())`, string(row.inbox), row.ref.Key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deleted, refs, err := repository.CleanupExpiredInboxes(context.Background(), 1)
+	if err != nil || deleted != 1 || len(refs) != 1 || refs[0].Key != exclusive.Key {
+		t.Fatalf("first cleanup = deleted %d refs %+v error %v", deleted, refs, err)
+	}
+	deleted, refs, err = repository.CleanupExpiredInboxes(context.Background(), 10)
+	if err != nil || deleted != 1 || len(refs) != 0 {
+		t.Fatalf("second cleanup = deleted %d refs %+v error %v", deleted, refs, err)
+	}
+	var inboxes, contents, messages int
+	if err := pool.QueryRow(context.Background(), "SELECT (SELECT count(*) FROM inboxes), (SELECT count(*) FROM mail_contents), (SELECT count(*) FROM messages)").Scan(&inboxes, &contents, &messages); err != nil {
+		t.Fatal(err)
+	}
+	if inboxes != 1 || contents != 1 || messages != 1 {
+		t.Fatalf("remaining counts = inboxes %d contents %d messages %d", inboxes, contents, messages)
+	}
+}

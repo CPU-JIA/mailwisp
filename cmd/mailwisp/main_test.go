@@ -15,6 +15,7 @@ func TestParseCommand(t *testing.T) {
 		{name: "explicit serve", arguments: []string{"serve"}, want: command{role: "serve"}},
 		{name: "migrate", arguments: []string{"migrate"}, want: command{role: "migrate"}},
 		{name: "reconcile", arguments: []string{"reconcile"}, want: command{role: "reconcile"}},
+		{name: "cleanup", arguments: []string{"cleanup"}, want: command{role: "cleanup"}},
 		{name: "repair orphans", arguments: []string{"reconcile", "--repair-orphans"}, want: command{role: "reconcile", repairOrphans: true}},
 		{name: "backup", arguments: []string{"backup", "backup-2026-07-15"}, want: command{role: "backup", path: "backup-2026-07-15"}},
 		{name: "restore", arguments: []string{"restore", "backup-2026-07-15"}, want: command{role: "restore", path: "backup-2026-07-15"}},

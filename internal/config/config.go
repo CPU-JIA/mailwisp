@@ -23,6 +23,7 @@ type Config struct {
 	Content         Content
 	Inbox           Inbox
 	Compatibility   Compatibility
+	Cleanup         Cleanup
 	LogLevel        slog.Level
 	ShutdownTimeout time.Duration
 }
@@ -51,6 +52,11 @@ type Inbox struct {
 // Compatibility enables isolated third-party HTTP adapters.
 type Compatibility struct {
 	DuckMailEnabled bool
+}
+
+// Cleanup contains bounded retention settings.
+type Cleanup struct {
+	BatchSize int
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -153,6 +159,7 @@ func Load() (Config, error) {
 		Compatibility: Compatibility{
 			DuckMailEnabled: duckMailEnabled,
 		},
+		Cleanup:         Cleanup{BatchSize: integer("CLEANUP_BATCH_SIZE", 100)},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
@@ -283,6 +290,9 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("MAILWISP_SHUTDOWN_TIMEOUT must be positive"))
+	}
+	if c.Cleanup.BatchSize <= 0 || c.Cleanup.BatchSize > 1000 {
+		errs = append(errs, errors.New("MAILWISP_CLEANUP_BATCH_SIZE must be between 1 and 1000"))
 	}
 	return errors.Join(errs...)
 }

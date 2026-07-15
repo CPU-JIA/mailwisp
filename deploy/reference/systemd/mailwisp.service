@@ -1,0 +1,39 @@
+[Unit]
+Description=MailWisp temporary mail service
+After=network-online.target postgresql.service mailwisp-migrate.service
+Wants=network-online.target
+Requires=mailwisp-migrate.service
+
+[Service]
+Type=simple
+User=mailwisp
+Group=mailwisp
+WorkingDirectory=/var/lib/mailwisp
+EnvironmentFile=/etc/mailwisp/mailwisp.env
+ExecStart=/usr/local/bin/mailwisp serve
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/mailwisp
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+
