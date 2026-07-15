@@ -23,6 +23,7 @@ type InboxResolver interface {
 
 // MessageReceiver durably receives one accepted LMTP transaction.
 type MessageReceiver interface {
+	CheckCapacity(context.Context) error
 	Receive(context.Context, message.ReceiveRequest) (message.Receipt, error)
 }
 
@@ -33,6 +34,7 @@ type Metrics interface {
 	LMTPSessionRejected()
 	ObserveLMTPDelivery(int)
 	ObserveLMTPQuotaRejected(string)
+	ObserveLMTPStorageRejected(string)
 }
 
 // Options configures LMTP resource limits and deadlines.

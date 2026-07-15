@@ -55,6 +55,7 @@ MAILWISP_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 MAILWISP_POSTGRES_DSN=postgres://mailwisp:<secret>@127.0.0.1:5432/mailwisp?sslmode=require
 MAILWISP_CONTENT_ROOT=/var/lib/mailwisp/content
 MAILWISP_CONTENT_MAX_BYTES=26214400
+MAILWISP_CONTENT_MIN_FREE_BYTES=1073741824
 MAILWISP_BROWSER_SESSION_KEY=<base64-encoded-32-byte-secret>
 MAILWISP_BROWSER_SESSION_LIFETIME=12h
 MAILWISP_CLEANUP_BATCH_SIZE=100
@@ -65,6 +66,8 @@ MAILWISP_YYDS_ENABLED=false
 MAILWISP_CLOUDFLARE_TEMP_ENABLED=false
 MAILWISP_CLOUDFLARE_LEGACY_PATHS_ENABLED=false
 ```
+
+`MAILWISP_CONTENT_MIN_FREE_BYTES`是Content Store文件系统的保留水位；LMTP在DATA前预检，写入前再次预留最大消息窗口。压力状态返回可重试`452 4.3.1`，不得通过降低到单封最大邮件以下来掩盖磁盘不足。
 
 Browser Session Key必须独立随机生成，例如`openssl rand -base64 32`。Browser Session始终使用Secure `__Host-` Cookie，因此本地纯HTTP开发继续使用内存Capability模式。轮换Key会立即退出所有现有浏览器Session，但不会撤销Canonical Capability。
 

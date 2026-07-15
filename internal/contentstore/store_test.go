@@ -77,6 +77,61 @@ func TestStoreRejectsOversizedContentAndCleansStaging(t *testing.T) {
 	assertDirectoryEmpty(t, store.stagingRoot)
 }
 
+func TestStoreCapacityGuardReservesAndReleasesBoundedWrites(t *testing.T) {
+	t.Parallel()
+
+	store, err := Open(t.TempDir(), Options{MaxBytes: 40, MinFreeBytes: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.availableBytes = func(string) (uint64, error) { return 150, nil }
+	if err := store.CheckCapacity(context.Background()); err != nil {
+		t.Fatalf("CheckCapacity() error = %v", err)
+	}
+	release, err := store.reserve(context.Background())
+	if err != nil {
+		t.Fatalf("reserve() error = %v", err)
+	}
+	if err := store.CheckCapacity(context.Background()); !errors.Is(err, ErrInsufficientStorage) {
+		t.Fatalf("CheckCapacity(while reserved) error = %v", err)
+	}
+	release()
+	release()
+	if err := store.CheckCapacity(context.Background()); err != nil {
+		t.Fatalf("CheckCapacity(after release) error = %v", err)
+	}
+}
+
+func TestStoreRejectsWriteBeforeStagingWhenFreeSpaceFloorWouldBeCrossed(t *testing.T) {
+	t.Parallel()
+
+	store, err := Open(t.TempDir(), Options{MaxBytes: 40, MinFreeBytes: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.availableBytes = func(string) (uint64, error) { return 139, nil }
+	if _, err := store.Put(context.Background(), bytes.NewReader([]byte("mail"))); !errors.Is(err, ErrInsufficientStorage) {
+		t.Fatalf("Put() error = %v, want ErrInsufficientStorage", err)
+	}
+	assertDirectoryEmpty(t, store.stagingRoot)
+}
+
+func TestStoreCapacityCheckPreservesProbeAndContextErrors(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t, 40)
+	probeErr := errors.New("capacity probe failed")
+	store.availableBytes = func(string) (uint64, error) { return 0, probeErr }
+	if err := store.CheckCapacity(context.Background()); !errors.Is(err, probeErr) {
+		t.Fatalf("CheckCapacity(probe) error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := store.CheckCapacity(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CheckCapacity(cancelled) error = %v", err)
+	}
+}
+
 func TestStoreConcurrentDuplicatePut(t *testing.T) {
 	t.Parallel()
 
@@ -297,6 +352,9 @@ func TestOpenValidatesConfiguration(t *testing.T) {
 	}
 	if _, err := Open(t.TempDir(), Options{}); err == nil {
 		t.Fatal("Open() with zero MaxBytes error = nil, want error")
+	}
+	if _, err := Open(t.TempDir(), Options{MaxBytes: 1, MinFreeBytes: -1}); err == nil {
+		t.Fatal("Open() with negative MinFreeBytes error = nil, want error")
 	}
 }
 

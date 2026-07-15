@@ -184,6 +184,102 @@ func TestSessionMapsStorageQuotaAtCommit(t *testing.T) {
 	}
 }
 
+func TestSessionRejectsStoragePressureBeforeData(t *testing.T) {
+	t.Parallel()
+
+	receiveCalled := false
+	server := newTestServer(t,
+		&resolverStub{results: map[string]message.InboxID{"first@example.com": firstInboxID}},
+		&receiverStub{
+			check: func(context.Context) error { return message.ErrInsufficientStorage },
+			receive: func(context.Context, message.ReceiveRequest) (message.Receipt, error) {
+				receiveCalled = true
+				return message.Receipt{}, nil
+			},
+		},
+	)
+	metrics := &lmtpMetricsStub{}
+	server.SetMetrics(metrics)
+	runSession(t, server, func(client *lmtpClient) {
+		client.expectCode(220)
+		client.send("LHLO client")
+		client.readResponse(250)
+		client.send("MAIL FROM:<sender@example.com>")
+		client.expectCode(250)
+		client.send("RCPT TO:<first@example.com>")
+		client.expectCode(250)
+		client.send("DATA")
+		response := client.expectCode(452)
+		if !strings.Contains(response, "4.3.1") {
+			t.Fatalf("storage pressure response = %q", response)
+		}
+		client.send("QUIT")
+		client.expectCode(221)
+	})
+	if receiveCalled || metrics.storageCapacity.Load() != 1 {
+		t.Fatalf("storage preflight receive=%t metric=%d", receiveCalled, metrics.storageCapacity.Load())
+	}
+}
+
+func TestSessionMapsStorageProbeFailureBeforeData(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t,
+		&resolverStub{results: map[string]message.InboxID{"first@example.com": firstInboxID}},
+		&receiverStub{check: func(context.Context) error { return errors.New("statfs failed") }},
+	)
+	metrics := &lmtpMetricsStub{}
+	server.SetMetrics(metrics)
+	runSession(t, server, func(client *lmtpClient) {
+		client.expectCode(220)
+		client.send("LHLO client")
+		client.readResponse(250)
+		client.send("MAIL FROM:<sender@example.com>")
+		client.expectCode(250)
+		client.send("RCPT TO:<first@example.com>")
+		client.expectCode(250)
+		client.send("DATA")
+		client.expectCode(451)
+		client.send("QUIT")
+		client.expectCode(221)
+	})
+	if metrics.storageCheckError.Load() != 1 {
+		t.Fatalf("storage check error metric = %d", metrics.storageCheckError.Load())
+	}
+}
+
+func TestSessionMapsStoragePressureDuringCommit(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t,
+		&resolverStub{results: map[string]message.InboxID{"first@example.com": firstInboxID}},
+		&receiverStub{receive: func(_ context.Context, request message.ReceiveRequest) (message.Receipt, error) {
+			_, _ = io.ReadAll(request.Raw)
+			return message.Receipt{}, message.ErrInsufficientStorage
+		}},
+	)
+	metrics := &lmtpMetricsStub{}
+	server.SetMetrics(metrics)
+	runSession(t, server, func(client *lmtpClient) {
+		client.expectCode(220)
+		client.send("LHLO client")
+		client.readResponse(250)
+		client.send("MAIL FROM:<sender@example.com>")
+		client.expectCode(250)
+		client.send("RCPT TO:<first@example.com>")
+		client.expectCode(250)
+		client.send("DATA")
+		client.expectCode(354)
+		client.writeRaw("Subject: pressure\r\n\r\nbody\r\n.\r\n")
+		client.expectCode(452)
+		client.send("QUIT")
+		client.expectCode(221)
+	})
+	if metrics.storageCapacity.Load() != 1 || metrics.deliveryStatus.Load() != 452 {
+		t.Fatalf("storage commit metrics capacity=%d delivery=%d", metrics.storageCapacity.Load(), metrics.deliveryStatus.Load())
+	}
+}
+
 func TestSessionMapsTemporaryDeliveryFailurePerRecipient(t *testing.T) {
 	t.Parallel()
 
@@ -444,6 +540,8 @@ type lmtpMetricsStub struct {
 	deliveryStatus           atomic.Int64
 	quotaMessages            atomic.Int64
 	quotaStorage             atomic.Int64
+	storageCapacity          atomic.Int64
+	storageCheckError        atomic.Int64
 }
 
 func (m *lmtpMetricsStub) LMTPSessionOpened()        { m.opened.Add(1) }
@@ -455,6 +553,13 @@ func (m *lmtpMetricsStub) ObserveLMTPQuotaRejected(reason string) {
 		m.quotaMessages.Add(1)
 	} else if reason == "storage_bytes" {
 		m.quotaStorage.Add(1)
+	}
+}
+func (m *lmtpMetricsStub) ObserveLMTPStorageRejected(reason string) {
+	if reason == "capacity" {
+		m.storageCapacity.Add(1)
+	} else if reason == "check_error" {
+		m.storageCheckError.Add(1)
 	}
 }
 
@@ -673,7 +778,15 @@ func (s *resolverStub) ResolveInboxForDelivery(_ context.Context, address string
 }
 
 type receiverStub struct {
+	check   func(context.Context) error
 	receive func(context.Context, message.ReceiveRequest) (message.Receipt, error)
+}
+
+func (s *receiverStub) CheckCapacity(ctx context.Context) error {
+	if s.check == nil {
+		return nil
+	}
+	return s.check(ctx)
 }
 
 func (s *receiverStub) Receive(ctx context.Context, request message.ReceiveRequest) (message.Receipt, error) {

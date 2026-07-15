@@ -10,6 +10,7 @@ import (
 
 // ContentStore durably stores immutable raw message bytes.
 type ContentStore interface {
+	CheckCapacity(context.Context) error
 	Put(context.Context, io.Reader) (ContentRef, error)
 }
 
@@ -51,6 +52,11 @@ func NewReceiver(contentStore ContentStore, repository DeliveryRepository) (*Rec
 		repository:   repository,
 		now:          time.Now,
 	}, nil
+}
+
+// CheckCapacity verifies that durable storage can accept one bounded delivery.
+func (r *Receiver) CheckCapacity(ctx context.Context) error {
+	return r.contentStore.CheckCapacity(ctx)
 }
 
 // Receive stores raw bytes first, then atomically commits metadata for every recipient.
