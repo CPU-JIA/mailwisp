@@ -1,0 +1,33 @@
+{
+  "name": "mailwisp-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "22.20.0",
+    "npm": "11.15.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "dompurify": "3.4.12",
+    "vue": "3.5.39",
+    "vue-i18n": "11.4.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.7",
+    "@playwright/test": "1.61.1",
+    "happy-dom": "20.10.6",
+    "oxlint": "1.74.0",
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vitest": "4.1.10",
+    "vue-tsc": "3.3.7"
+  }
+}

@@ -22,6 +22,8 @@ coverage.out
 # Frontend artifacts
 web/node_modules/
 web/dist/
+web/test-results/
+web/playwright-report/
 **/node_modules/
 spikes/frontend/dist/
 spikes/frontend/test-results/
