@@ -146,8 +146,9 @@ func testConfig(t *testing.T) config.Config {
 			RetryMax:      time.Second,
 		},
 		Content: config.Content{
-			Root:     filepath.Join(t.TempDir(), "content"),
-			MaxBytes: 1 << 20,
+			Root:         filepath.Join(t.TempDir(), "content"),
+			MaxBytes:     1 << 20,
+			MinFreeBytes: 1 << 20,
 		},
 		Inbox: config.Inbox{
 			PublicDomains:   []string{"mailwisp.test"},
@@ -166,6 +167,8 @@ func discardLogger() *slog.Logger {
 }
 
 type appContentStoreStub struct{}
+
+func (s *appContentStoreStub) CheckCapacity(context.Context) error { return nil }
 
 func (s *appContentStoreStub) Put(_ context.Context, source io.Reader) (message.ContentRef, error) {
 	content, err := io.ReadAll(source)

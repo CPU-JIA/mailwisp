@@ -38,7 +38,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Postgres.MaxConnections != 10 || cfg.Postgres.MinConnections != 1 {
 		t.Fatalf("Postgres defaults = %+v", cfg.Postgres)
 	}
-	if cfg.Content.Root != "./data/content" || cfg.Content.MaxBytes != 25<<20 {
+	if cfg.Content.Root != "./data/content" || cfg.Content.MaxBytes != 25<<20 || cfg.Content.MinFreeBytes != 1<<30 {
 		t.Fatalf("Content defaults = %+v", cfg.Content)
 	}
 	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Inbox.MaxMessages != 500 || cfg.Inbox.MaxStorageBytes != 256<<20 || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled || cfg.Compatibility.CloudflareTempEnabled || cfg.Compatibility.CloudflareLegacyPathsEnabled {
@@ -150,6 +150,25 @@ func TestValidateRejectsCrossComponentLimitMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnsafeContentCapacityLimits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "CONTENT_MIN_FREE_BYTES", value: "1024"},
+		{name: "CONTENT_MAX_BYTES", value: "1125899906842625"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigurationEnvironment(t)
+			t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+			t.Setenv(prefix+test.name, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want content capacity validation error")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidInboxDeliveryQuotas(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -242,6 +261,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"POSTGRES_CONNECT_TIMEOUT",
 		"CONTENT_ROOT",
 		"CONTENT_MAX_BYTES",
+		"CONTENT_MIN_FREE_BYTES",
 	} {
 		t.Setenv(prefix+name, "")
 	}

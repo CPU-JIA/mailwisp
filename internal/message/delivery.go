@@ -22,6 +22,8 @@ var (
 	ErrInboxMessageQuotaExceeded = errors.New("inbox message quota exceeded")
 	// ErrInboxStorageQuotaExceeded indicates that one recipient reached its logical byte limit.
 	ErrInboxStorageQuotaExceeded = errors.New("inbox storage quota exceeded")
+	// ErrInsufficientStorage indicates that durable content capacity is temporarily unavailable.
+	ErrInsufficientStorage = errors.New("insufficient durable storage")
 )
 
 const sha256HexLength = 64

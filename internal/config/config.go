@@ -111,8 +111,9 @@ type Postgres struct {
 
 // Content contains immutable raw-content storage settings.
 type Content struct {
-	Root     string
-	MaxBytes int64
+	Root         string
+	MaxBytes     int64
+	MinFreeBytes int64
 }
 
 // Load reads configuration from the process environment and validates it.
@@ -186,8 +187,9 @@ func Load() (Config, error) {
 			ConnectTimeout: duration("POSTGRES_CONNECT_TIMEOUT", 5*time.Second),
 		},
 		Content: Content{
-			Root:     value("CONTENT_ROOT", "./data/content"),
-			MaxBytes: integer64("CONTENT_MAX_BYTES", 25<<20),
+			Root:         value("CONTENT_ROOT", "./data/content"),
+			MaxBytes:     integer64("CONTENT_MAX_BYTES", 25<<20),
+			MinFreeBytes: integer64("CONTENT_MIN_FREE_BYTES", 1<<30),
 		},
 		Inbox: Inbox{
 			PublicDomains:   commaSeparated("PUBLIC_DOMAINS", "mailwisp.local"),
@@ -319,8 +321,11 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Content.Root) == "" {
 		errs = append(errs, errors.New("MAILWISP_CONTENT_ROOT must not be empty"))
 	}
-	if c.Content.MaxBytes < c.LMTP.MaxMessageBytes {
-		errs = append(errs, errors.New("MAILWISP_CONTENT_MAX_BYTES must be at least MAILWISP_LMTP_MAX_MESSAGE_BYTES"))
+	if c.Content.MaxBytes < c.LMTP.MaxMessageBytes || c.Content.MaxBytes > 1<<50 {
+		errs = append(errs, errors.New("MAILWISP_CONTENT_MAX_BYTES must be at least MAILWISP_LMTP_MAX_MESSAGE_BYTES and at most 1125899906842624"))
+	}
+	if c.Content.MinFreeBytes < c.LMTP.MaxMessageBytes || c.Content.MinFreeBytes > 1<<50 {
+		errs = append(errs, errors.New("MAILWISP_CONTENT_MIN_FREE_BYTES must be at least MAILWISP_LMTP_MAX_MESSAGE_BYTES and at most 1125899906842624"))
 	}
 	if len(c.Inbox.PublicDomains) == 0 {
 		errs = append(errs, errors.New("MAILWISP_PUBLIC_DOMAINS must contain at least one domain"))

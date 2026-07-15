@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"mailwisp/internal/message"
@@ -30,11 +32,14 @@ var (
 	ErrInvalidKey = errors.New("invalid content key")
 	// ErrContentCorrupt indicates that stored bytes do not match their reference.
 	ErrContentCorrupt = errors.New("stored content does not match reference")
+	// ErrInsufficientStorage indicates that the configured free-space floor cannot be preserved.
+	ErrInsufficientStorage = message.ErrInsufficientStorage
 )
 
 // Options configures a local content store.
 type Options struct {
-	MaxBytes int64
+	MaxBytes     int64
+	MinFreeBytes int64
 }
 
 // Store persists immutable content beneath one filesystem root.
@@ -42,10 +47,14 @@ type Options struct {
 // Staging and final objects intentionally share the same root so that creating
 // the final hard link is atomic and cannot cross filesystem boundaries.
 type Store struct {
-	root        string
-	objectsRoot string
-	stagingRoot string
-	maxBytes    int64
+	root           string
+	objectsRoot    string
+	stagingRoot    string
+	maxBytes       int64
+	minFreeBytes   int64
+	capacityMu     sync.Mutex
+	reservedBytes  int64
+	availableBytes func(string) (uint64, error)
 	// putObserver is an unexported deterministic crash-test seam. Production
 	// composition never assigns it.
 	putObserver func(putStage)
@@ -66,6 +75,9 @@ func Open(root string, options Options) (*Store, error) {
 	if options.MaxBytes <= 0 {
 		return nil, errors.New("content store max bytes must be positive")
 	}
+	if options.MinFreeBytes < 0 {
+		return nil, errors.New("content store minimum free bytes must not be negative")
+	}
 
 	absoluteRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -73,10 +85,12 @@ func Open(root string, options Options) (*Store, error) {
 	}
 
 	store := &Store{
-		root:        absoluteRoot,
-		objectsRoot: filepath.Join(absoluteRoot, "objects", "sha256"),
-		stagingRoot: filepath.Join(absoluteRoot, "staging"),
-		maxBytes:    options.MaxBytes,
+		root:           absoluteRoot,
+		objectsRoot:    filepath.Join(absoluteRoot, "objects", "sha256"),
+		stagingRoot:    filepath.Join(absoluteRoot, "staging"),
+		maxBytes:       options.MaxBytes,
+		minFreeBytes:   options.MinFreeBytes,
+		availableBytes: filesystemAvailableBytes,
 	}
 
 	for _, directory := range []string{store.root, store.objectsRoot, store.stagingRoot} {
@@ -106,10 +120,15 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 	if err := ctx.Err(); err != nil {
 		return message.ContentRef{}, err
 	}
+	release, err := s.reserve(ctx)
+	if err != nil {
+		return message.ContentRef{}, err
+	}
+	defer release()
 
 	staging, err := os.CreateTemp(s.stagingRoot, "content-*.stage")
 	if err != nil {
-		return message.ContentRef{}, fmt.Errorf("create staging file: %w", err)
+		return message.ContentRef{}, wrapStorageError("create staging file", err)
 	}
 	stagingPath := staging.Name()
 	keepStaging := false
@@ -129,7 +148,7 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 	written, copyErr := io.CopyBuffer(io.MultiWriter(staging, hash), limited, make([]byte, copyBufferBytes))
 	if copyErr != nil {
 		_ = staging.Close()
-		return message.ContentRef{}, fmt.Errorf("write staging content: %w", copyErr)
+		return message.ContentRef{}, wrapStorageError("write staging content", copyErr)
 	}
 	if written > s.maxBytes {
 		_ = staging.Close()
@@ -141,11 +160,11 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 	}
 	if err := staging.Sync(); err != nil {
 		_ = staging.Close()
-		return message.ContentRef{}, fmt.Errorf("sync staging content: %w", err)
+		return message.ContentRef{}, wrapStorageError("sync staging content", err)
 	}
 	s.observePut(putStageFileSynced)
 	if err := staging.Close(); err != nil {
-		return message.ContentRef{}, fmt.Errorf("close staging content: %w", err)
+		return message.ContentRef{}, wrapStorageError("close staging content", err)
 	}
 
 	digest := hex.EncodeToString(hash.Sum(nil))
@@ -156,10 +175,10 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 	}
 	destinationDirectory := filepath.Dir(destination)
 	if err := os.MkdirAll(destinationDirectory, 0o700); err != nil {
-		return message.ContentRef{}, fmt.Errorf("create object directory: %w", err)
+		return message.ContentRef{}, wrapStorageError("create object directory", err)
 	}
 	if err := syncDirectoryTree(s.objectsRoot, destinationDirectory); err != nil {
-		return message.ContentRef{}, fmt.Errorf("sync object directory tree: %w", err)
+		return message.ContentRef{}, wrapStorageError("sync object directory tree", err)
 	}
 
 	linkErr := os.Link(stagingPath, destination)
@@ -168,7 +187,7 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 		s.observePut(putStageObjectLinked)
 		if err := syncDirectory(destinationDirectory); err != nil {
 			keepStaging = true
-			return message.ContentRef{}, fmt.Errorf("sync installed object directory: %w", err)
+			return message.ContentRef{}, wrapStorageError("sync installed object directory", err)
 		}
 	case errors.Is(linkErr, os.ErrExist):
 		info, statErr := os.Stat(destination)
@@ -182,7 +201,7 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 			return message.ContentRef{}, fmt.Errorf("verify existing object: %w", err)
 		}
 	default:
-		return message.ContentRef{}, fmt.Errorf("install content object: %w", linkErr)
+		return message.ContentRef{}, wrapStorageError("install content object", linkErr)
 	}
 
 	if err := os.Remove(stagingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -190,10 +209,74 @@ func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, 
 		return message.ContentRef{}, fmt.Errorf("remove installed staging file: %w", err)
 	}
 	if err := syncDirectory(s.stagingRoot); err != nil {
-		return message.ContentRef{}, fmt.Errorf("sync staging directory: %w", err)
+		return message.ContentRef{}, wrapStorageError("sync staging directory", err)
 	}
 
 	return ref, nil
+}
+
+// CheckCapacity verifies that one maximum-size content write can preserve the configured free-space floor.
+func (s *Store) CheckCapacity(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("content capacity context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.capacityMu.Lock()
+	defer s.capacityMu.Unlock()
+	return s.checkCapacityLocked(ctx, s.maxBytes)
+}
+
+func (s *Store) reserve(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		return nil, errors.New("content capacity context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.capacityMu.Lock()
+	defer s.capacityMu.Unlock()
+	if err := s.checkCapacityLocked(ctx, s.maxBytes); err != nil {
+		return nil, err
+	}
+	s.reservedBytes += s.maxBytes
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.capacityMu.Lock()
+			s.reservedBytes -= s.maxBytes
+			s.capacityMu.Unlock()
+		})
+	}, nil
+}
+
+func (s *Store) checkCapacityLocked(ctx context.Context, requestedBytes int64) error {
+	available, err := s.availableBytes(s.root)
+	if err != nil {
+		return fmt.Errorf("read content store free space: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.minFreeBytes < 0 || requestedBytes < 0 || s.reservedBytes < 0 {
+		return errors.New("content capacity accounting invariant violated")
+	}
+	availableBytes := int64(math.MaxInt64)
+	if available <= math.MaxInt64 {
+		availableBytes = int64(available)
+	}
+	if availableBytes < s.minFreeBytes || s.reservedBytes > availableBytes-s.minFreeBytes || requestedBytes > availableBytes-s.minFreeBytes-s.reservedBytes {
+		return fmt.Errorf("%w: available=%d reserved=%d required=%d floor=%d", ErrInsufficientStorage, availableBytes, s.reservedBytes, requestedBytes, s.minFreeBytes)
+	}
+	return nil
+}
+
+func wrapStorageError(operation string, err error) error {
+	if isDiskFull(err) {
+		return fmt.Errorf("%w: %s: %w", ErrInsufficientStorage, operation, err)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 func (s *Store) observePut(stage putStage) {

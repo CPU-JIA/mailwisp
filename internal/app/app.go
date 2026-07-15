@@ -62,7 +62,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		}
 	}()
 
-	store, err := contentstore.Open(cfg.Content.Root, contentstore.Options{MaxBytes: cfg.Content.MaxBytes})
+	store, err := contentstore.Open(cfg.Content.Root, contentstore.Options{
+		MaxBytes: cfg.Content.MaxBytes, MinFreeBytes: cfg.Content.MinFreeBytes,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open content store: %w", err)
 	}
@@ -303,6 +305,10 @@ func (a *App) Run(ctx context.Context) (returnError error) {
 type wakingReceiver struct {
 	receiver *message.Receiver
 	wake     func()
+}
+
+func (r *wakingReceiver) CheckCapacity(ctx context.Context) error {
+	return r.receiver.CheckCapacity(ctx)
 }
 
 func (r *wakingReceiver) Receive(ctx context.Context, request message.ReceiveRequest) (message.Receipt, error) {

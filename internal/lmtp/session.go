@@ -168,6 +168,24 @@ func (s *session) run(ctx context.Context) error {
 				}
 				continue
 			}
+			capacityContext, capacityCancel := context.WithTimeout(ctx, s.server.options.DeliveryTimeout)
+			capacityErr := s.server.receiver.CheckCapacity(capacityContext)
+			capacityCancel()
+			if capacityErr != nil {
+				reason := "check_error"
+				code, enhanced, text := 451, "4.3.0", "Temporary storage check failure"
+				if errors.Is(capacityErr, message.ErrInsufficientStorage) {
+					reason = "capacity"
+					code, enhanced, text = 452, "4.3.1", "Insufficient system storage"
+				}
+				if s.server.metrics != nil {
+					s.server.metrics.ObserveLMTPStorageRejected(reason)
+				}
+				if err := s.reply(code, enhanced, text); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := s.reply(354, "2.0.0", "End data with <CR><LF>.<CR><LF>"); err != nil {
 				return err
 			}
@@ -227,6 +245,9 @@ func (s *session) receiveData(ctx context.Context) error {
 		if reason := quotaRejectionReason(receiveErr); reason != "" {
 			s.server.metrics.ObserveLMTPQuotaRejected(reason)
 		}
+		if errors.Is(receiveErr, message.ErrInsufficientStorage) {
+			s.server.metrics.ObserveLMTPStorageRejected("capacity")
+		}
 	}
 	for _, recipient := range s.recipients {
 		if err := s.reply(code, enhanced, recipient.address+" "+text); err != nil {
@@ -251,6 +272,8 @@ func classifyDeliveryError(err error) (int, string, string) {
 		return 552, "5.2.2", "recipient message quota exceeded"
 	case errors.Is(err, message.ErrInboxStorageQuotaExceeded):
 		return 552, "5.2.2", "recipient storage quota exceeded"
+	case errors.Is(err, message.ErrInsufficientStorage):
+		return 452, "4.3.1", "insufficient system storage"
 	case errors.Is(err, message.ErrInvalidDelivery):
 		return 554, "5.6.0", "invalid delivery"
 	default:

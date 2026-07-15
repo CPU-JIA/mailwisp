@@ -29,6 +29,14 @@ MAILWISP_INBOX_MAX_STORAGE_BYTES=268435456
 
 逻辑存储按Inbox中的每条Message累计Raw MIME大小，不按Content Store物理去重后的磁盘大小计算。该限制用于隔离单Inbox滥用，不替代主机磁盘水位监控。
 
+Content Store默认额外保留1 GiB文件系统可用空间：
+
+```dotenv
+MAILWISP_CONTENT_MIN_FREE_BYTES=1073741824
+```
+
+MailWisp会在LMTP DATA前预检，并在Content Store写入前为一个最大消息窗口执行并发预留。磁盘压力返回`452 4.3.1`，由Postfix保留Queue并重投。部署者仍应监控Docker数据目录；不得把该水位设为小于`MAILWISP_LMTP_MAX_MESSAGE_BYTES`。
+
 DNS至少包含Web/SMTP Host的A/AAAA记录和收件域名MX记录，云厂商必须允许公网25端口。
 
 ## 2. 首次证书
@@ -102,6 +110,7 @@ docker compose run --rm app restore /backups/<bundle-directory>
 - 浏览器完成创建、Session/Token、收件、正文、附件与删除流程；
 - 外部SMTP投递后可从API读取，未知Recipient永久失败，过载返回临时失败；
 - Inbox达到Message或逻辑存储配额后返回`552 5.2.2`，且多Recipient投递不产生部分写入；
+- Content Store低于安全水位时返回`452 4.3.1`，释放空间后Postfix Queue能够成功重投；
 - `openssl s_client -starttls smtp -connect mx.example.com:25 -servername mx.example.com`；
 - 强制重启App后Postfix Queue能够重投；
 - 证书Dry Run、备份恢复、Content Reconciliation与断电恢复演练通过。

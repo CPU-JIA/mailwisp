@@ -56,6 +56,11 @@ func TestPostfixLMTPRetrySemantics(t *testing.T) {
 	}) {
 		return
 	}
+	if !t.Run("Content Store磁盘压力恢复后重投", func(t *testing.T) {
+		testStoragePressureRetries(t, postfix, lmtpPort)
+	}) {
+		return
+	}
 	if !t.Run("确认丢失允许独立重复消息并复用内容", func(t *testing.T) {
 		testLostAcknowledgementDuplicates(t, postfix, lmtpPort)
 	}) {
@@ -115,6 +120,27 @@ func testTemporaryFailureRetries(t *testing.T, postfix *postfixFixture, lmtpPort
 	if !bytes.Equal(first.raw, second.raw) {
 		t.Fatal("Postfix retry changed the queued raw message")
 	}
+	waitForQueueID(t, postfix.container, queueID, false)
+}
+
+func testStoragePressureRetries(t *testing.T, postfix *postfixFixture, lmtpPort int) {
+	resolver := newStaticResolver(testRecipient)
+	receiver := newRecordingReceiver(0)
+	receiver.capacityFailures = 1
+	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
+	defer service.stop(t)
+
+	raw := rawMessage("storage-pressure", "Storage pressure", "retry after LMTP 452")
+	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
+	if err := receiver.nextCapacityCheck(t); !errors.Is(err, message.ErrInsufficientStorage) {
+		t.Fatalf("first capacity check error = %v", err)
+	}
+	waitForContainerLog(t, postfix.container, queueID, "452 4.3.1", "status=deferred")
+	waitForQueueID(t, postfix.container, queueID, true)
+
+	flushQueue(t, postfix.container)
+	attempt := receiver.next(t)
+	assertAttempt(t, attempt, testEnvelopeSender, raw)
 	waitForQueueID(t, postfix.container, queueID, false)
 }
 
@@ -490,11 +516,29 @@ type recordedAttempt struct {
 type recordingReceiver struct {
 	mu                sync.Mutex
 	temporaryFailures int
+	capacityFailures  int
+	capacityChecks    chan error
 	attempts          chan recordedAttempt
 }
 
 func newRecordingReceiver(temporaryFailures int) *recordingReceiver {
-	return &recordingReceiver{temporaryFailures: temporaryFailures, attempts: make(chan recordedAttempt, 8)}
+	return &recordingReceiver{
+		temporaryFailures: temporaryFailures,
+		capacityChecks:    make(chan error, 8),
+		attempts:          make(chan recordedAttempt, 8),
+	}
+}
+
+func (r *recordingReceiver) CheckCapacity(context.Context) error {
+	r.mu.Lock()
+	var err error
+	if r.capacityFailures > 0 {
+		r.capacityFailures--
+		err = message.ErrInsufficientStorage
+	}
+	r.mu.Unlock()
+	r.capacityChecks <- err
+	return err
 }
 
 func (r *recordingReceiver) Receive(_ context.Context, request message.ReceiveRequest) (message.Receipt, error) {
@@ -525,6 +569,17 @@ func (r *recordingReceiver) next(t *testing.T) recordedAttempt {
 	case <-time.After(20 * time.Second):
 		t.Fatal("timed out waiting for LMTP delivery attempt")
 		return recordedAttempt{}
+	}
+}
+
+func (r *recordingReceiver) nextCapacityCheck(t *testing.T) error {
+	t.Helper()
+	select {
+	case err := <-r.capacityChecks:
+		return err
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for LMTP storage capacity check")
+		return nil
 	}
 }
 

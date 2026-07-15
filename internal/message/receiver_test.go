@@ -112,6 +112,20 @@ func TestReceiverPreservesStoreAndRepositoryErrors(t *testing.T) {
 	})
 }
 
+func TestReceiverDelegatesCapacityCheck(t *testing.T) {
+	t.Parallel()
+
+	receiver, err := NewReceiver(&contentStoreStub{check: func(context.Context) error {
+		return ErrInsufficientStorage
+	}}, &repositoryStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.CheckCapacity(context.Background()); !errors.Is(err, ErrInsufficientStorage) {
+		t.Fatalf("CheckCapacity() error = %v", err)
+	}
+}
+
 func TestNewReceiverValidatesDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -132,7 +146,15 @@ func validRequest(inboxID InboxID) ReceiveRequest {
 }
 
 type contentStoreStub struct {
-	put func(context.Context, io.Reader) (ContentRef, error)
+	check func(context.Context) error
+	put   func(context.Context, io.Reader) (ContentRef, error)
+}
+
+func (s *contentStoreStub) CheckCapacity(ctx context.Context) error {
+	if s.check == nil {
+		return nil
+	}
+	return s.check(ctx)
 }
 
 func (s *contentStoreStub) Put(ctx context.Context, source io.Reader) (ContentRef, error) {

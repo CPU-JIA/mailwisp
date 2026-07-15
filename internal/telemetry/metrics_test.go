@@ -17,6 +17,8 @@ func TestMetricsExposeBoundedApplicationSignals(t *testing.T) {
 	metrics.ObserveLMTPDelivery(451)
 	metrics.ObserveLMTPQuotaRejected("storage_bytes")
 	metrics.ObserveLMTPQuotaRejected("unbounded")
+	metrics.ObserveLMTPStorageRejected("capacity")
+	metrics.ObserveLMTPStorageRejected("unbounded")
 	metrics.ObserveParser("success", 10*time.Millisecond)
 	metrics.ObserveRetention("success", 2, 1)
 	recorder := httptest.NewRecorder()
@@ -30,6 +32,7 @@ func TestMetricsExposeBoundedApplicationSignals(t *testing.T) {
 		`mailwisp_lmtp_sessions_rejected_total 1`,
 		`mailwisp_lmtp_deliveries_total{result="temporary_failure"} 1`,
 		`mailwisp_lmtp_quota_rejections_total{reason="storage_bytes"} 1`,
+		`mailwisp_lmtp_storage_rejections_total{reason="capacity"} 1`,
 		`mailwisp_parser_runs_total{result="success"} 1`,
 		`mailwisp_retention_deleted_total{kind="inbox"} 2`,
 	} {
