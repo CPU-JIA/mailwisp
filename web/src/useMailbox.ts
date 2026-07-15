@@ -2,6 +2,7 @@ import { onBeforeUnmount, ref } from 'vue'
 
 import { APIError, MailWispClient } from './api/client'
 import type { Attachment, Capability, Inbox, MessageDetail, MessageSummary } from './api/types'
+import { normalizeCID } from './messageHTML'
 
 export type Phase = 'welcome' | 'creating' | 'issued' | 'opening' | 'inbox' | 'detail' | 'error'
 
@@ -18,6 +19,7 @@ export function useMailbox(client = new MailWispClient()) {
   const issuedCapability = ref<Capability | null>(null)
   const messages = ref<MessageSummary[]>([])
   const selected = ref<MessageDetail | null>(null)
+  const inlineImages = ref<Record<string, string>>({})
   const error = ref<ViewError | null>(null)
   const refreshing = ref(false)
   let activeRequest: AbortController | null = null
@@ -93,14 +95,18 @@ export function useMailbox(client = new MailWispClient()) {
     activeRequest = new AbortController()
     try {
       selected.value = await client.getMessage(token.value, summary.id, activeRequest.signal)
+      inlineImages.value = {}
       phase.value = 'detail'
+      void loadInlineImages(selected.value, activeRequest.signal)
     } catch (cause) {
       handleError(cause)
     }
   }
 
   function closeMessage(): void {
+    cancelActiveRequest()
     selected.value = null
+    inlineImages.value = {}
     phase.value = 'inbox'
     schedulePoll()
   }
@@ -132,6 +138,34 @@ export function useMailbox(client = new MailWispClient()) {
     }
   }
 
+  async function loadInlineImages(detail: MessageDetail, signal: AbortSignal): Promise<void> {
+    const candidates: Attachment[] = []
+    let totalBytes = 0
+    for (const attachment of detail.attachments) {
+      if (!attachment.content_id || !attachment.content_type.startsWith('image/') || attachment.size_bytes <= 0 || attachment.size_bytes > 2 * 1024 * 1024) continue
+      if (candidates.length >= 16 || totalBytes + attachment.size_bytes > 8 * 1024 * 1024) break
+      candidates.push(attachment)
+      totalBytes += attachment.size_bytes
+    }
+    const sources: Record<string, string> = {}
+    let next = 0
+    const workers = Array.from({ length: Math.min(4, candidates.length) }, async () => {
+      while (next < candidates.length && !signal.aborted) {
+        const attachment = candidates[next++]
+        if (!attachment) return
+        try {
+          const blob = await client.downloadAttachment(token.value, detail.id, attachment.part_path, signal)
+          if (!blob.type.startsWith('image/') || blob.size > 2 * 1024 * 1024) continue
+          sources[normalizeCID(attachment.content_id)] = await blobToDataURL(blob)
+        } catch (cause) {
+          if (cause instanceof DOMException && cause.name === 'AbortError') return
+        }
+      }
+    })
+    await Promise.all(workers)
+    if (!signal.aborted && selected.value?.id === detail.id) inlineImages.value = sources
+  }
+
   async function deleteInbox(): Promise<void> {
     try {
       await client.deleteInbox(token.value)
@@ -151,6 +185,7 @@ export function useMailbox(client = new MailWispClient()) {
     issuedCapability.value = null
     messages.value = []
     selected.value = null
+    inlineImages.value = {}
     error.value = null
     phase.value = 'welcome'
   }
@@ -205,7 +240,16 @@ export function useMailbox(client = new MailWispClient()) {
 	}
 
   return {
-	phase, token, sessionActive, inbox, issuedCapability, messages, selected, error, refreshing,
+	phase, token, sessionActive, inbox, issuedCapability, messages, selected, inlineImages, error, refreshing,
     createInbox, openInbox, refreshMessages, openMessage, closeMessage, deleteMessage, downloadAttachment, deleteInbox, reset,
   }
+}
+
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(String(reader.result)))
+    reader.addEventListener('error', () => reject(reader.error))
+    reader.readAsDataURL(blob)
+  })
 }
