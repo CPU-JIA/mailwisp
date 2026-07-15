@@ -5,7 +5,7 @@
 
 ## 背景
 
-旧TempMail前端已经增长为超过4000行的单一JavaScript和超过8000行的单一CSS，字符串模板、Inline Event与主题覆盖相互耦合。MailWisp需要完整管理控制台、中英文、主题、Accessibility、邮件详情隔离和长期组件维护。
+MailWisp需要完整管理控制台、中英文、主题、Accessibility、邮件详情隔离和长期组件维护。原生单文件实现会把字符串模板、事件、状态和主题覆盖耦合到同一生命周期，无法满足这些边界。
 
 项目使用固定版本对原生TypeScript、Vue、React与Svelte实现了同一交互切片，并执行Production Build、Type Check、Playwright与axe-core。
 
@@ -43,7 +43,7 @@ Vue不是最小Bundle，但在Component、i18n、Accessibility、测试生态和
 
 ### 原生TypeScript作为完整控制台
 
-拒绝。网络最小，但手写DOM、事件、Escape、Focus与生命周期成本最高，容易重演旧项目。
+拒绝。网络最小，但手写DOM、事件、Escape、Focus与生命周期成本最高，长期形成单文件耦合的风险不可接受。
 
 ### React作为首选
 

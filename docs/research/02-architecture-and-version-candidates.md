@@ -23,7 +23,7 @@
 | chi | v5.3.0 | 候选HTTP Router，保持 `net/http` 兼容与较小依赖面 | https://github.com/go-chi/chi/releases/tag/v5.3.0 |
 | Gin | v1.12.0 | 功能完整，但本项目暂不优先，需与chi做实现复杂度对比 | https://github.com/gin-gonic/gin/releases/tag/v1.12.0 |
 | pgx | v5.10.0 | PostgreSQL Driver与Pool首选候选 | https://api.github.com/repos/jackc/pgx/tags |
-| PostgreSQL | 18.4 | 绿地Schema候选；旧数据迁移必须独立验证 | https://www.postgresql.org/versions.json |
+| PostgreSQL | 18.4 | 绿地Schema与唯一持久事实源；只验证MailWisp自身版本Migration | https://www.postgresql.org/versions.json |
 | PgBouncer | 1.25.2 | 默认不进入Reference链路，多副本或连接压力出现后再评估 | https://www.pgbouncer.org/changelog.html |
 | Redis | 8.8.0 | 限流、短期Cache与临时协调候选，不保存唯一持久数据 | https://github.com/redis/redis/releases/tag/8.8.0 |
 | Postfix | 3.11.5 | 公网SMTP与持久重试首选，不自研公网SMTP | https://www.postfix.org/announcements/postfix-3.11.5.html |
@@ -154,7 +154,7 @@ Profile必须来自真实Benchmark与容量模型，不使用虚构QPS。
 
 - 前端四类方案的同功能Technical Spike。
 - Nginx与Caddy从零部署体验和资源实测。
-- PostgreSQL 18旧Dump迁移与扩展兼容验证。
+- PostgreSQL 18的MailWisp Schema Migration、查询计划与恢复验证。
 - Local Object Store与PostgreSQL Raw MIME的真实样本Benchmark。
 - Redis存在与无Redis两种Rate Limit实现的复杂度和故障测试。
 - Cloudflare Temp Email、215.im与DuckMail兼容层对核心架构的影响。

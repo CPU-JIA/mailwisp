@@ -43,7 +43,7 @@
 
 优势：Runtime最少，部署无框架运行时，长期依赖面小。
 
-风险：需要自行定义Component Composition、Reactive State、Router、Form、i18n、Focus Management和测试工具；如果实现不严谨，很容易重新形成旧项目的字符串模板和事件耦合。
+风险：需要自行定义Component Composition、Reactive State、Router、Form、i18n、Focus Management和测试工具；如果实现不严谨，很容易形成字符串模板和事件耦合。
 
 ### Vue 3
 
@@ -169,7 +169,7 @@ E2E对每套方案验证：
 
 ### 淘汰原生TypeScript作为主控制台方案
 
-它的Bundle最小，但相同功能需要最多手写生命周期代码。旧项目已经证明原生大文件在功能增长后容易形成字符串模板、Inline Event和CSS覆盖堆积。原生方案仍适合极小Embed Widget，不适合MailWisp完整管理控制台。
+它的Bundle最小，但相同功能需要最多手写生命周期代码，功能增长后容易形成字符串模板、Inline Event和CSS覆盖堆积。原生方案仍适合极小Embed Widget，不适合MailWisp完整管理控制台。
 
 ### 淘汰React作为首选方案
 

@@ -57,14 +57,12 @@ MailWisp 是面向自托管场景的生产级临时邮箱服务。单台Linux服
 
 ## 4. 仓库边界
 
-- 本仓库是全新的 MailWisp 实现。
-- `../tempmail` 仅作为现有行为、数据库结构和数据兼容性的只读参考。
-- 除非用户明确要求，不得编辑、删除、格式化、迁移或提交 `../tempmail` 中的任何文件。
-- 旧实现既是行为证据，也是可选择复用的素材来源。算法、SQL、协议处理、测试样本和UI资产只有经过逐项审查、测试与重构后才可复用。
-- 不因“完全重构”而重复制造已经正确、清晰且可验证的实现；也不因“节省时间”继承边界混乱、安全性不足或阻碍目标架构的代码。
-- 禁止未经审查直接复制巨型旧文件。无法证明复用收益的部分直接舍弃。
-- 所有现有生产数据必须通过明确、可测试的迁移兼容。
-- 本地兼容性、备份恢复和回滚验证完成前，不得修改生产服务器。
+- MailWisp是完全独立的新产品，不是旧TempMail的重构版、升级版或兼容发行版。
+- `../tempmail`及其源码、Schema、Dump、Raw Mail、配置、Secret和运行数据全部不属于本项目输入；不得读取、复制、迁移、编辑、删除、格式化或提交其中任何内容，除非用户未来重新明确授权一个独立任务。
+- 不实现旧TempMail数据迁移、API兼容、Token兼容、配置兼容或行为兼容，也不把旧实现作为架构、测试Fixture和产品需求的证据来源。
+- MailWisp只对自身已发布版本提供Migration、Backup、Restore和Rollback Contract；首次正式发布前不存在旧产品升级路径。
+- DuckMail、YYDS与Cloudflare Temp Email兼容是面向外部客户端的可选Adapter，不代表与旧TempMail存在任何继承关系。
+- 未经明确授权，不得修改任何生产服务器、生产数据、DNS或真实Secret。
 
 ## 5. 候选运行架构
 
@@ -321,7 +319,7 @@ docs/decisions/      Architecture Decision Record
 - Integration Test覆盖PostgreSQL Migration、Repository和Redis原子行为。
 - End-to-end Test覆盖SMTP/LMTP收件直到API读取。
 - Security Test覆盖Authentication、Scope、Ownership、Rate Limit、恶意MIME和HTML隔离。
-- Migration Test必须恢复一份旧数据库副本并核对Count和Invariant。
+- Migration Test必须从前一MailWisp Schema版本或受支持Release备份恢复，并核对Count和Invariant。
 - 完成Go变更前必须执行：
 
 ```text
@@ -437,7 +435,7 @@ govulncheck ./...
 - Security和Data Lifecycle影响已审查。
 - 文档、示例与代码一致。
 - Git中没有Secret和生产数据。
-- Compatibility声明有旧系统行为或数据作为权威证据。
+- Compatibility声明必须有对应第三方一手文档、固定版本Fixture与Contract Test作为权威证据。
 - Git流程、Commit、Push和PR步骤没有被跳过。
 - 所有操作在用户授权范围内，没有越权。
 - 最终仓库具有明确Reference Profile、容量模型和匹配资源建议，不以现有服务器限制质量。

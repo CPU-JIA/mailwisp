@@ -7,7 +7,7 @@
 
 MailWisp面向自托管场景，由一名维护者优先完成Reference Deployment Profile。系统存在HTTP API、LMTP Ingress、邮件解析、Webhook、Retention和Cleanup等清晰职责，但当前没有独立团队、独立发布节奏或必须分别扩容的生产证据。
 
-过早拆分微服务会立即引入内部RPC、Service Discovery、跨服务Tracing、部署排序和分布式失败。把全部职责混入无边界大文件则会重演旧TempMail的结构问题。
+过早拆分微服务会立即引入内部RPC、Service Discovery、跨服务Tracing、部署排序和分布式失败；把全部职责混入无边界大文件同样会形成巨型文件和隐式耦合。
 
 ## 决策
 
@@ -69,7 +69,7 @@ mailwisp migrate
 
 ### 单进程但不划分模块
 
-拒绝。旧项目已经证明HTTP、LMTP、DNS、SQL与Lifecycle混合会形成巨型文件和隐式耦合。
+拒绝。HTTP、LMTP、DNS、SQL与Lifecycle属于不同责任边界，混合后无法独立测试、审查和演进。
 
 ### Go直接承担公网SMTP
 
