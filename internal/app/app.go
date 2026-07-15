@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mailwisp/internal/auth"
+	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/config"
 	"mailwisp/internal/contentstore"
 	"mailwisp/internal/duckmail"
@@ -177,6 +178,17 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 			return nil, fmt.Errorf("create YYDS compatibility service: %w", err)
 		}
 		httpServer.SetYYDSService(yydsService)
+	}
+	if cfg.Compatibility.CloudflareTempEnabled {
+		cloudflareRepository, err := postgres.NewCloudflareTempRepository(pool)
+		if err != nil {
+			return nil, fmt.Errorf("create Cloudflare Temp Email repository: %w", err)
+		}
+		cloudflareService, err := cloudflaretemp.NewService(mailboxService, cloudflareRepository, cfg.Inbox.PublicDomains)
+		if err != nil {
+			return nil, fmt.Errorf("create Cloudflare Temp Email compatibility service: %w", err)
+		}
+		httpServer.SetCloudflareTempService(cloudflareService, cfg.Compatibility.CloudflareLegacyPathsEnabled)
 	}
 
 	cleanupPool = false

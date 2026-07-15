@@ -47,7 +47,7 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
-    location ~ ^/(api|compat)/ {
+    location ~ ^/(api|compat|open_api|user_api)/ {
         proxy_pass http://app:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $remote_addr;

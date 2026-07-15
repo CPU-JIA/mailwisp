@@ -158,6 +158,8 @@ DuckMail Adapter默认关闭。设置`MAILWISP_DUCKMAIL_ENABLED=true`后，在`/
 
 YYDS Adapter默认关闭。设置`MAILWISP_YYDS_ENABLED=true`后，在`/compat/yyds/v1`提供Passwordless Temporary Inbox核心Contract；JWT、`AC-` API Key、Webhook与WebSocket不会被虚假声明为已兼容，详见[YYDS兼容边界](docs/compatibility/yyds.md)。
 
+Cloudflare Temp Email Adapter默认关闭。设置`MAILWISP_CLOUDFLARE_TEMP_ENABLED=true`后，在`/compat/cloudflare-temp`提供最新匿名Inbox核心Contract；只有额外启用`MAILWISP_CLOUDFLARE_LEGACY_PATHS_ENABLED=true`才开放上游Root Path。Address `jwt`字段承载可撤销Canonical Opaque Capability，不签发永久HS256 JWT，详见[Cloudflare Temp Email兼容边界](docs/compatibility/cloudflare-temp-email.md)。
+
 所有错误使用包含稳定`code`、可读`message`与`request_id`的JSON Envelope。Capability只能访问自身Inbox，删除最后一条内容引用时会同步清理Raw MIME；异常残留由Content Reconciliation兜底。
 
 当前`main`已用真实Integration覆盖Postfix与Go LMTP的可靠队列边界；`deploy/postfix-test`是隔离测试资源，不是生产配置。公网域名、TLS、反滥用、DNS和生产资源限制完成前，不应直接宣称生产SMTP部署完成。

@@ -56,8 +56,10 @@ type Inbox struct {
 
 // Compatibility enables isolated third-party HTTP adapters.
 type Compatibility struct {
-	DuckMailEnabled bool
-	YYDSEnabled     bool
+	DuckMailEnabled              bool
+	YYDSEnabled                  bool
+	CloudflareTempEnabled        bool
+	CloudflareLegacyPathsEnabled bool
 }
 
 // BrowserSession contains optional same-origin Cookie authentication settings.
@@ -125,6 +127,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cloudflareTempEnabled, err := parseBoolean("CLOUDFLARE_TEMP_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cloudflareLegacyPathsEnabled, err := parseBoolean("CLOUDFLARE_LEGACY_PATHS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 	postgresDSN, err := postgresDSNWithPasswordFile(value("POSTGRES_DSN", ""), strings.TrimSpace(os.Getenv(prefix+"POSTGRES_PASSWORD_FILE")))
 	if err != nil {
 		return Config{}, err
@@ -183,8 +193,10 @@ func Load() (Config, error) {
 			MaxTTL:        duration("INBOX_MAX_TTL", 7*24*time.Hour),
 		},
 		Compatibility: Compatibility{
-			DuckMailEnabled: duckMailEnabled,
-			YYDSEnabled:     yydsEnabled,
+			DuckMailEnabled:              duckMailEnabled,
+			YYDSEnabled:                  yydsEnabled,
+			CloudflareTempEnabled:        cloudflareTempEnabled,
+			CloudflareLegacyPathsEnabled: cloudflareLegacyPathsEnabled,
 		},
 		BrowserSession: BrowserSession{
 			Key:      browserSessionKey,
@@ -322,6 +334,9 @@ func (c Config) Validate() error {
 	}
 	if c.Inbox.DefaultTTL <= 0 || c.Inbox.MaxTTL <= 0 || c.Inbox.DefaultTTL > c.Inbox.MaxTTL {
 		errs = append(errs, errors.New("MAILWISP_INBOX_DEFAULT_TTL and MAILWISP_INBOX_MAX_TTL must define a positive ordered range"))
+	}
+	if c.Compatibility.CloudflareLegacyPathsEnabled && !c.Compatibility.CloudflareTempEnabled {
+		errs = append(errs, errors.New("MAILWISP_CLOUDFLARE_LEGACY_PATHS_ENABLED requires MAILWISP_CLOUDFLARE_TEMP_ENABLED"))
 	}
 	if len(c.BrowserSession.Key) != 0 && len(c.BrowserSession.Key) != 32 {
 		errs = append(errs, errors.New("MAILWISP_BROWSER_SESSION_KEY must decode to exactly 32 bytes"))

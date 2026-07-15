@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"mailwisp/internal/auth"
+	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/config"
 	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mailbox"
@@ -54,20 +55,23 @@ type CapabilityAuthenticator interface {
 
 // Server owns the public HTTP server and its lifecycle.
 type Server struct {
-	httpServer       *http.Server
-	logger           *slog.Logger
-	ready            atomic.Bool
-	readiness        ReadinessChecker
-	readinessTimeout time.Duration
-	mailbox          MailboxService
-	authenticator    CapabilityAuthenticator
-	browserSessions  *auth.BrowserSessionManager
-	limiter          *createLimiter
-	trustedProxies   []*net.IPNet
-	duckMail         *duckmail.Service
-	yyds             *yyds.Service
-	metricsHandler   http.Handler
-	metrics          HTTPMetrics
+	httpServer                *http.Server
+	logger                    *slog.Logger
+	ready                     atomic.Bool
+	readiness                 ReadinessChecker
+	readinessTimeout          time.Duration
+	mailbox                   MailboxService
+	authenticator             CapabilityAuthenticator
+	browserSessions           *auth.BrowserSessionManager
+	limiter                   *createLimiter
+	trustedProxies            []*net.IPNet
+	duckMail                  *duckmail.Service
+	yyds                      *yyds.Service
+	cloudflareTemp            *cloudflaretemp.Service
+	cloudflareTempLegacyPaths bool
+	cloudflareTempHeavy       chan struct{}
+	metricsHandler            http.Handler
+	metrics                   HTTPMetrics
 }
 
 // NewServer creates a production-configured public HTTP server.
@@ -75,7 +79,7 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	server := &Server{logger: logger, readinessTimeout: cfg.ReadinessTimeout}
+	server := &Server{logger: logger, readinessTimeout: cfg.ReadinessTimeout, cloudflareTempHeavy: make(chan struct{}, 2)}
 	if cfg.CreateRatePerMinute <= 0 {
 		cfg.CreateRatePerMinute = 12
 	}
@@ -126,6 +130,26 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /compat/yyds/v1/messages/{id}", server.handleYYDSMessage)
 	mux.HandleFunc("GET /compat/yyds/v1/sources/{id}", server.handleYYDSSource)
 	mux.HandleFunc("GET /compat/yyds/v1/messages/{id}/attachments/{part}", server.handleYYDSAttachment)
+	mux.HandleFunc("GET /compat/cloudflare-temp/open_api/settings", server.handleCloudflareTempOpenSettings)
+	mux.HandleFunc("GET /compat/cloudflare-temp/user_api/open_settings", server.handleCloudflareTempUserOpenSettings)
+	mux.HandleFunc("POST /compat/cloudflare-temp/api/new_address", server.handleCloudflareTempCreateAddress)
+	mux.HandleFunc("GET /compat/cloudflare-temp/api/settings", server.handleCloudflareTempSettings)
+	mux.HandleFunc("GET /compat/cloudflare-temp/api/mails", server.handleCloudflareTempRawMails)
+	mux.HandleFunc("GET /compat/cloudflare-temp/api/mail/{id}", server.handleCloudflareTempRawMail)
+	mux.HandleFunc("GET /compat/cloudflare-temp/api/parsed_mails", server.handleCloudflareTempParsedMails)
+	mux.HandleFunc("GET /compat/cloudflare-temp/api/parsed_mail/{id}", server.handleCloudflareTempParsedMail)
+	mux.HandleFunc("DELETE /compat/cloudflare-temp/api/mails/{id}", server.handleCloudflareTempDeleteMail)
+	mux.HandleFunc("DELETE /compat/cloudflare-temp/api/delete_address", server.handleCloudflareTempDeleteAddress)
+	mux.HandleFunc("GET /open_api/settings", server.handleCloudflareTempOpenSettings)
+	mux.HandleFunc("GET /user_api/open_settings", server.handleCloudflareTempUserOpenSettings)
+	mux.HandleFunc("POST /api/new_address", server.handleCloudflareTempCreateAddress)
+	mux.HandleFunc("GET /api/settings", server.handleCloudflareTempSettings)
+	mux.HandleFunc("GET /api/mails", server.handleCloudflareTempRawMails)
+	mux.HandleFunc("GET /api/mail/{id}", server.handleCloudflareTempRawMail)
+	mux.HandleFunc("GET /api/parsed_mails", server.handleCloudflareTempParsedMails)
+	mux.HandleFunc("GET /api/parsed_mail/{id}", server.handleCloudflareTempParsedMail)
+	mux.HandleFunc("DELETE /api/mails/{id}", server.handleCloudflareTempDeleteMail)
+	mux.HandleFunc("DELETE /api/delete_address", server.handleCloudflareTempDeleteAddress)
 
 	server.httpServer = &http.Server{
 		Addr:              cfg.Addr,
@@ -158,6 +182,12 @@ func (s *Server) SetDuckMailService(service *duckmail.Service) { s.duckMail = se
 
 // SetYYDSService enables the isolated YYDS Mail compatibility namespace.
 func (s *Server) SetYYDSService(service *yyds.Service) { s.yyds = service }
+
+// SetCloudflareTempService enables the isolated Cloudflare Temp Email compatibility namespace.
+func (s *Server) SetCloudflareTempService(service *cloudflaretemp.Service, legacyPaths bool) {
+	s.cloudflareTemp = service
+	s.cloudflareTempLegacyPaths = legacyPaths
+}
 
 // SetMetrics enables the internal Prometheus endpoint and request observer.
 func (s *Server) SetMetrics(handler http.Handler, observer HTTPMetrics) {

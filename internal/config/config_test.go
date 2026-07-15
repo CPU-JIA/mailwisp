@@ -41,7 +41,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Content.Root != "./data/content" || cfg.Content.MaxBytes != 25<<20 {
 		t.Fatalf("Content defaults = %+v", cfg.Content)
 	}
-	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled {
+	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled || cfg.Compatibility.CloudflareTempEnabled || cfg.Compatibility.CloudflareLegacyPathsEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
 	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour {
@@ -71,7 +71,7 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidCompatibilityBoolean(t *testing.T) {
-	for _, name := range []string{"DUCKMAIL_ENABLED", "YYDS_ENABLED"} {
+	for _, name := range []string{"DUCKMAIL_ENABLED", "YYDS_ENABLED", "CLOUDFLARE_TEMP_ENABLED", "CLOUDFLARE_LEGACY_PATHS_ENABLED"} {
 		t.Run(name, func(t *testing.T) {
 			clearConfigurationEnvironment(t)
 			t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
@@ -80,6 +80,15 @@ func TestLoadRejectsInvalidCompatibilityBoolean(t *testing.T) {
 				t.Fatal("Load() error = nil, want compatibility boolean parsing error")
 			}
 		})
+	}
+}
+
+func TestLoadRejectsCloudflareLegacyPathsWithoutAdapter(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"CLOUDFLARE_LEGACY_PATHS_ENABLED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want Cloudflare legacy path dependency error")
 	}
 }
 
@@ -181,6 +190,8 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
 		"YYDS_ENABLED",
+		"CLOUDFLARE_TEMP_ENABLED",
+		"CLOUDFLARE_LEGACY_PATHS_ENABLED",
 		"BROWSER_SESSION_KEY",
 		"BROWSER_SESSION_KEY_FILE",
 		"BROWSER_SESSION_LIFETIME",

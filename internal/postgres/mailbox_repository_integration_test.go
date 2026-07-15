@@ -14,6 +14,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"mailwisp/internal/auth"
+	"mailwisp/internal/cloudflaretemp"
 	"mailwisp/internal/contentstore"
 	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mailbox"
@@ -57,6 +58,44 @@ func TestDuckMailMigrationUpgradesVersionThreeData(t *testing.T) {
 	}
 	if inboxCount != 1 || credentialTable != 1 || seenColumn != 1 {
 		t.Fatalf("migration counts = inbox %d table %d column %d", inboxCount, credentialTable, seenColumn)
+	}
+}
+
+func TestCloudflareTempMigrationUpgradesVersionFourData(t *testing.T) {
+	dropIntegrationSchema(t)
+	t.Cleanup(func() { recreateIntegrationSchema(t) })
+	config, err := pgx.ParseConfig(integrationDataSourceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := stdlib.OpenDB(*config)
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = database.Close() })
+	provider, err := goose.NewProvider(goose.DialectPostgres, database, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(context.Background(), 4); err != nil {
+		t.Fatalf("apply migrations through version 4: %v", err)
+	}
+	if _, err := database.ExecContext(context.Background(), `INSERT INTO inboxes (address) VALUES ('v4@mailwisp.test')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(context.Background(), 5); err != nil {
+		t.Fatalf("apply migration 5: %v", err)
+	}
+	var inboxCount, inboxIDTable, messageIDTable int
+	if err := database.QueryRowContext(context.Background(), `
+		SELECT
+		  (SELECT count(*) FROM inboxes WHERE address = 'v4@mailwisp.test'),
+		  (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cloudflare_temp_inbox_ids'),
+		  (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'cloudflare_temp_message_ids')
+	`).Scan(&inboxCount, &inboxIDTable, &messageIDTable); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 1 || inboxIDTable != 1 || messageIDTable != 1 {
+		t.Fatalf("migration counts = inbox %d tables %d/%d", inboxCount, inboxIDTable, messageIDTable)
 	}
 }
 
@@ -157,6 +196,91 @@ func TestYYDSCreatesExactAddressAndAtomicallyRotatesCapability(t *testing.T) {
 	newPrincipal, err := capabilities.Authenticate(context.Background(), rotated.Plaintext, auth.ScopeMessageUpdate)
 	if err != nil || newPrincipal.InboxID != created.Inbox.ID {
 		t.Fatalf("Authenticate(rotated) = %+v, error = %v", newPrincipal, err)
+	}
+}
+
+func TestCloudflareTempCreatesAddressAndAssignsStableOwnedIntegerIDs(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	mailboxRepository, err := NewMailboxRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilityRepository, err := NewInboxCapabilityRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := auth.NewCapabilityService(capabilityRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := contentstore.Open(t.TempDir(), contentstore.Options{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxes, err := mailbox.NewService(mailboxRepository, capabilities, store, mailbox.Options{
+		PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idRepository, err := NewCloudflareTempRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := cloudflaretemp.NewService(mailboxes, idRepository, []string{"mailwisp.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := adapter.CreateAddress(context.Background(), "Contract.Name", "mailwisp.test")
+	if err != nil {
+		t.Fatalf("CreateAddress() error = %v", err)
+	}
+	if created.Inbox.Address != "contractname@mailwisp.test" || created.AddressID <= 0 {
+		t.Fatalf("created = %+v", created)
+	}
+	principal, err := capabilities.Authenticate(context.Background(), created.Capability.Plaintext, auth.ScopeMessageRead)
+	if err != nil || principal.InboxID != created.Inbox.ID {
+		t.Fatalf("Authenticate() = %+v, error = %v", principal, err)
+	}
+	stableInboxID, err := idRepository.EnsureInboxID(context.Background(), created.Inbox.ID)
+	if err != nil || stableInboxID != created.AddressID {
+		t.Fatalf("EnsureInboxID() = %d, error = %v", stableInboxID, err)
+	}
+
+	ref := message.ContentRef{Key: contentKey("c"), SizeBytes: 12}
+	if _, err := pool.Exec(context.Background(), "INSERT INTO mail_contents (content_key, size_bytes) VALUES ($1, $2)", ref.Key, ref.SizeBytes); err != nil {
+		t.Fatal(err)
+	}
+	var canonicalMessageID message.MessageID
+	if err := pool.QueryRow(context.Background(), `
+		INSERT INTO messages (inbox_id, content_key, envelope_sender, received_at)
+		VALUES ($1::uuid, $2, 'sender@example.net', now())
+		RETURNING id::text
+	`, string(created.Inbox.ID), ref.Key).Scan(&canonicalMessageID); err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := idRepository.EnsureMessageIDs(context.Background(), created.Inbox.ID, []message.MessageID{canonicalMessageID})
+	if err != nil || mapped[canonicalMessageID] <= 0 {
+		t.Fatalf("EnsureMessageIDs() = %+v, error = %v", mapped, err)
+	}
+	stableMessageIDs, err := idRepository.EnsureMessageIDs(context.Background(), created.Inbox.ID, []message.MessageID{canonicalMessageID})
+	if err != nil || stableMessageIDs[canonicalMessageID] != mapped[canonicalMessageID] {
+		t.Fatalf("EnsureMessageIDs(stable) = %+v, error = %v", stableMessageIDs, err)
+	}
+	resolved, err := idRepository.FindMessageID(context.Background(), created.Inbox.ID, mapped[canonicalMessageID])
+	if err != nil || resolved != canonicalMessageID {
+		t.Fatalf("FindMessageID() = %q, error = %v", resolved, err)
+	}
+	other := createInbox(t, pool, "other@mailwisp.test")
+	if _, err := idRepository.FindMessageID(context.Background(), other, mapped[canonicalMessageID]); !errors.Is(err, cloudflaretemp.ErrMessageIDNotFound) {
+		t.Fatalf("cross-Inbox FindMessageID() error = %v", err)
+	}
+	if _, err := pool.Exec(context.Background(), "DELETE FROM messages WHERE id = $1::uuid", string(canonicalMessageID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idRepository.FindMessageID(context.Background(), created.Inbox.ID, mapped[canonicalMessageID]); !errors.Is(err, cloudflaretemp.ErrMessageIDNotFound) {
+		t.Fatalf("FindMessageID(after cascade) error = %v", err)
 	}
 }
 
