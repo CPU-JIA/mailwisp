@@ -53,11 +53,15 @@ MAILWISP_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 MAILWISP_POSTGRES_DSN=postgres://mailwisp:<secret>@127.0.0.1:5432/mailwisp?sslmode=require
 MAILWISP_CONTENT_ROOT=/var/lib/mailwisp/content
 MAILWISP_CONTENT_MAX_BYTES=26214400
+MAILWISP_BROWSER_SESSION_KEY=<base64-encoded-32-byte-secret>
+MAILWISP_BROWSER_SESSION_LIFETIME=12h
 MAILWISP_CLEANUP_BATCH_SIZE=100
 MAILWISP_CLEANUP_INTERVAL=0s
 MAILWISP_CLEANUP_TIMEOUT=2m
 MAILWISP_DUCKMAIL_ENABLED=false
 ```
+
+Browser Session Key必须独立随机生成，例如`openssl rand -base64 32`。Browser Session始终使用Secure `__Host-` Cookie，因此本地纯HTTP开发继续使用内存Capability模式。轮换Key会立即退出所有现有浏览器Session，但不会撤销Canonical Capability。
 
 本机PostgreSQL也必须启用TLS或改用权限受控的Unix Socket；不得使用公网监听代替。
 

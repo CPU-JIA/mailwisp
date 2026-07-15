@@ -68,7 +68,7 @@ function openFromToken(): void {
 }
 
 function errorMessage(code: string): string {
-  const known = ['network_error', 'unauthenticated', 'rate_limited', 'invalid_request', 'not_found', 'internal_error']
+  const known = ['network_error', 'unauthenticated', 'csrf_failed', 'rate_limited', 'invalid_request', 'not_found', 'internal_error']
   return t(`error.${known.includes(code) ? code : 'generic'}`)
 }
 </script>

@@ -23,4 +23,18 @@ describe('MailWispClient', () => {
       code: 'unauthenticated', status: 401, requestID: 'request-1',
     })
   })
+
+  it('uses Cookie session CSRF for mutations without exposing a capability', async () => {
+	const inbox = { id: '1', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+	  .mockResolvedValueOnce(new Response(JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf-proof' } }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+	  .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = new MailWispClient('https://mail.example')
+	await client.exchangeSession('wisp_cap_secret')
+    await client.deleteInbox('')
+	const [url, init] = fetchMock.mock.calls[1] ?? []
+    expect(url).toBe('https://mail.example/api/v1/inboxes/me')
+    expect(init?.headers).toMatchObject({ 'X-MailWisp-CSRF': 'csrf-proof' })
+    expect(init?.headers).not.toHaveProperty('Authorization')
+  })
 })
