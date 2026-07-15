@@ -163,6 +163,21 @@ func TestBrowserSessionExchangeRequiresCSRFForMutation(t *testing.T) {
 	}
 }
 
+func TestAttachmentDownloadStreamsOwnedContent(t *testing.T) {
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetMailboxService(&mailboxAPIStub{}, &authStub{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/inboxes/me/messages/018f26e5-8f04-7b44-8ba2-4a8f434dcb12/attachments/2", nil)
+	request.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "attachment bytes" {
+		t.Fatalf("attachment response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Content-Type") != "text/plain" || !strings.Contains(recorder.Header().Get("Content-Disposition"), "report.txt") {
+		t.Fatalf("attachment headers = %v", recorder.Header())
+	}
+}
+
 type readinessStub struct {
 	err error
 }
@@ -188,6 +203,9 @@ func (*mailboxAPIStub) ListMessages(context.Context, message.InboxID, int) ([]ma
 }
 func (*mailboxAPIStub) GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error) {
 	return mailbox.MessageDetail{}, nil
+}
+func (*mailboxAPIStub) OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error) {
+	return mailbox.AttachmentSource{Reader: io.NopCloser(strings.NewReader("attachment bytes")), FileName: "report.txt", ContentType: "text/plain", Size: 16}, nil
 }
 func (*mailboxAPIStub) DeleteMessage(context.Context, message.InboxID, message.MessageID) error {
 	return nil

@@ -24,6 +24,16 @@ describe('MailWispClient', () => {
     })
   })
 
+  it('downloads attachments with the active capability', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('attachment', { status: 200, headers: { 'Content-Type': 'text/plain' } }))
+    const client = new MailWispClient('https://mail.example')
+    const blob = await client.downloadAttachment('wisp_cap_secret', 'message-id', '2.1')
+    expect(await blob.text()).toBe('attachment')
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(url).toBe('https://mail.example/api/v1/inboxes/me/messages/message-id/attachments/2.1')
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer wisp_cap_secret' })
+  })
+
   it('uses Cookie session CSRF for mutations without exposing a capability', async () => {
 	const inbox = { id: '1', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
     const fetchMock = vi.spyOn(globalThis, 'fetch')

@@ -67,6 +67,24 @@ export class MailWispClient {
     return this.#request<MessageDetail>(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}`, this.#authenticated(token, signal))
   }
 
+  async downloadAttachment(token: string, messageID: string, partPath: string, signal?: AbortSignal): Promise<Blob> {
+    let response: Response
+    try {
+      response = await fetch(`${this.#baseURL}/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(partPath)}`, {
+        ...this.#authenticated(token, signal),
+        credentials: 'same-origin',
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      throw new APIError(0, { error: { code: 'network_error', message: 'Network request failed', request_id: '' } })
+    }
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined) as ErrorEnvelope | undefined
+      throw new APIError(response.status, payload)
+    }
+    return response.blob()
+  }
+
   async deleteMessage(token: string, messageID: string, signal?: AbortSignal): Promise<void> {
     await this.#request<void>(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}`, {
       ...this.#authenticated(token, signal),

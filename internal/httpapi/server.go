@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
@@ -36,6 +37,7 @@ type MailboxService interface {
 	Delete(context.Context, message.InboxID) error
 	ListMessages(context.Context, message.InboxID, int) ([]mailbox.MessageSummary, error)
 	GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error)
+	OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error)
 	DeleteMessage(context.Context, message.InboxID, message.MessageID) error
 }
 
@@ -89,6 +91,7 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/inboxes/me", server.handleDeleteInbox)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages", server.handleListMessages)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages/{id}", server.handleGetMessage)
+	mux.HandleFunc("GET /api/v1/inboxes/me/messages/{id}/attachments/{part}", server.handleGetAttachment)
 	mux.HandleFunc("DELETE /api/v1/inboxes/me/messages/{id}", server.handleDeleteMessage)
 	mux.HandleFunc("GET /compat/duckmail/domains", server.handleDuckMailDomains)
 	mux.HandleFunc("POST /compat/duckmail/accounts", server.handleDuckMailCreateAccount)
@@ -328,6 +331,40 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, request *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": detail})
+}
+
+func (s *Server) handleGetAttachment(w http.ResponseWriter, request *http.Request) {
+	principal, ok := s.requirePrincipal(w, request, auth.ScopeMessageRead)
+	if !ok {
+		return
+	}
+	messageID, err := parseMessageID(request.PathValue("id"))
+	if err != nil {
+		writeMappedError(w, request, mailbox.ErrMessageNotFound)
+		return
+	}
+	source, err := s.mailbox.OpenAttachment(request.Context(), principal.InboxID, messageID, request.PathValue("part"))
+	if err != nil {
+		writeMappedError(w, request, err)
+		return
+	}
+	defer source.Reader.Close()
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	contentType := source.ContentType
+	if mediaType, _, parseErr := mime.ParseMediaType(contentType); parseErr != nil || mediaType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": source.FileName}); disposition != "" {
+		w.Header().Set("Content-Disposition", disposition)
+	}
+	if source.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(source.Size, 10))
+	}
+	if _, err := io.Copy(w, source.Reader); err != nil {
+		s.logger.WarnContext(request.Context(), "attachment stream failed", "request_id", requestIDFromContext(request.Context()), "error", err)
+	}
 }
 
 func (s *Server) handleDeleteMessage(w http.ResponseWriter, request *http.Request) {
