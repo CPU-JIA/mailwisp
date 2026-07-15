@@ -82,13 +82,20 @@ function Assert-MailWispTokenDetection {
             $fixture = 'credential=' + 'wisp_' + $tokenType + '_v1_' + $kid + '_' + $secret
             [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'credential.txt'), $fixture)
 
-            & gitleaks dir $fixtureRoot `
-                --config (Join-Path $RepositoryRoot '.gitleaks.toml') `
-                --no-banner `
-                --redact `
-                --exit-code 23 *> $null
-            if ($LASTEXITCODE -ne 23) {
-                throw "MailWisp $tokenType token scanner probe returned exit code $LASTEXITCODE instead of 23."
+            $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+            try {
+                $PSNativeCommandUseErrorActionPreference = $false
+                & gitleaks dir $fixtureRoot `
+                    --config (Join-Path $RepositoryRoot '.gitleaks.toml') `
+                    --no-banner `
+                    --redact `
+                    --exit-code 23 *> $null
+                $scannerExitCode = $LASTEXITCODE
+            } finally {
+                $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+            }
+            if ($scannerExitCode -ne 23) {
+                throw "MailWisp $tokenType token scanner probe returned exit code $scannerExitCode instead of 23."
             }
         }
     } finally {
