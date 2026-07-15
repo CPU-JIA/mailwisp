@@ -67,6 +67,14 @@ go vet ./...
 govulncheck ./...
 ```
 
+Compose核心容量Benchmark：
+
+```powershell
+./scripts/benchmark-compose.ps1
+```
+
+结果为机器可读JSON、Docker Stats与Prometheus Snapshot；方法和适用边界见[Compose容量Benchmark](docs/benchmarks/README.md)。
+
 ## 本地启动
 
 准备PostgreSQL并复制 `.env.example` 中的配置到本地环境后，先执行Migration：

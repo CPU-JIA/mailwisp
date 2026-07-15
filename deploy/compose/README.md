@@ -128,3 +128,13 @@ docker compose run --rm app restore /backups/<bundle-directory>
 - 证书Dry Run、备份恢复、Content Reconciliation与断电恢复演练通过。
 
 这些验收未完成前，不得把目标服务器标记为生产就绪。
+
+## 7. 容量Benchmark
+
+使用隔离Compose Project运行核心HTTP与LMTP黑盒容量测试：
+
+```powershell
+./scripts/benchmark-compose.ps1
+```
+
+脚本只把测试端口绑定到`127.0.0.1`，输出机器可读结果到`artifacts/compose-benchmark/`，并在结束后删除本次临时Volume。场景边界与结果解读见[`docs/benchmarks/README.md`](../../docs/benchmarks/README.md)。该核心Benchmark绕过Nginx与Postfix，不能冒充公网端到端容量。
