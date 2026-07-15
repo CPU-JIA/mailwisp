@@ -313,7 +313,7 @@ func TestDeliveryRepositoryPreflightsInboxQuotasBeforeData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("q"), 8)); err != nil {
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("a"), 8)); err != nil {
 		t.Fatalf("first CommitDelivery() error = %v", err)
 	}
 	if _, err := repository.ResolveInboxForDelivery(context.Background(), "quota@example.com", 2); err != nil {
@@ -322,7 +322,7 @@ func TestDeliveryRepositoryPreflightsInboxQuotasBeforeData(t *testing.T) {
 	if _, err := repository.ResolveInboxForDelivery(context.Background(), "quota@example.com", 3); !errors.Is(err, message.ErrInboxStorageQuotaExceeded) {
 		t.Fatalf("ResolveInboxForDelivery(bytes) error = %v", err)
 	}
-	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("r"), 2)); err != nil {
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("b"), 2)); err != nil {
 		t.Fatalf("second CommitDelivery() error = %v", err)
 	}
 	if _, err := repository.ResolveInboxForDelivery(context.Background(), "quota@example.com", 0); !errors.Is(err, message.ErrInboxMessageQuotaExceeded) {
@@ -340,7 +340,7 @@ func TestDeliveryRepositoryEnforcesQuotaAtomicallyUnderConcurrency(t *testing.T)
 	}
 	start := make(chan struct{})
 	errorsChannel := make(chan error, 2)
-	for _, key := range []string{contentKey("s"), contentKey("t")} {
+	for _, key := range []string{contentKey("c"), contentKey("d")} {
 		go func(content string) {
 			<-start
 			_, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, content, 10))
@@ -373,10 +373,10 @@ func TestDeliveryRepositoryRejectsStorageQuotaBeforeContentMetadata(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("u"), 8)); err != nil {
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("e"), 8)); err != nil {
 		t.Fatal(err)
 	}
-	rejectedKey := contentKey("v")
+	rejectedKey := contentKey("f")
 	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, rejectedKey, 3)); !errors.Is(err, message.ErrInboxStorageQuotaExceeded) {
 		t.Fatalf("CommitDelivery(storage quota) error = %v", err)
 	}
@@ -399,10 +399,10 @@ func TestDeliveryRepositoryRejectsMultiRecipientDeliveryAtomicallyWhenOneInboxIs
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.CommitDelivery(context.Background(), validDelivery(fullInbox, contentKey("w"), 10)); err != nil {
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(fullInbox, contentKey("a"), 10)); err != nil {
 		t.Fatalf("fill Inbox: %v", err)
 	}
-	rejected := validDelivery(availableInbox, contentKey("x"), 10)
+	rejected := validDelivery(availableInbox, contentKey("b"), 10)
 	rejected.Recipients = []message.InboxID{availableInbox, fullInbox}
 	if _, err := repository.CommitDelivery(context.Background(), rejected); !errors.Is(err, message.ErrInboxMessageQuotaExceeded) {
 		t.Fatalf("CommitDelivery(multi-recipient quota) error = %v", err)
