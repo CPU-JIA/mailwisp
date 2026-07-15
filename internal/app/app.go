@@ -24,6 +24,7 @@ import (
 	"mailwisp/internal/message"
 	"mailwisp/internal/postgres"
 	"mailwisp/internal/telemetry"
+	"mailwisp/internal/yyds"
 )
 
 // App owns the process lifecycle and concrete service composition.
@@ -169,6 +170,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 			return nil, fmt.Errorf("create DuckMail service: %w", err)
 		}
 		httpServer.SetDuckMailService(duckMailService)
+	}
+	if cfg.Compatibility.YYDSEnabled {
+		yydsService, err := yyds.NewService(mailboxService, capabilityService, cfg.Inbox.PublicDomains)
+		if err != nil {
+			return nil, fmt.Errorf("create YYDS compatibility service: %w", err)
+		}
+		httpServer.SetYYDSService(yydsService)
 	}
 
 	cleanupPool = false

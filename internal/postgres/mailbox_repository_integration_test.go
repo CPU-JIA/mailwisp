@@ -18,6 +18,7 @@ import (
 	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
+	"mailwisp/internal/yyds"
 	"mailwisp/migrations"
 )
 
@@ -100,6 +101,65 @@ func TestMailboxServiceCreatesAuthenticatableInbox(t *testing.T) {
 	}
 }
 
+func TestYYDSCreatesExactAddressAndAtomicallyRotatesCapability(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	mailboxRepository, err := NewMailboxRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilityRepository, err := NewInboxCapabilityRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities, err := auth.NewCapabilityService(capabilityRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := contentstore.Open(t.TempDir(), contentstore.Options{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxes, err := mailbox.NewService(mailboxRepository, capabilities, store, mailbox.Options{
+		PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := yyds.NewService(mailboxes, capabilities, []string{"mailwisp.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := adapter.CreateAccount(context.Background(), yyds.CreateAccountRequest{LocalPart: "contract", Domain: "mailwisp.test"})
+	if err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	if created.Inbox.Address != "contract@mailwisp.test" {
+		t.Fatalf("created address = %q", created.Inbox.Address)
+	}
+	oldToken := created.Capability.Plaintext
+	principal, err := capabilities.Authenticate(context.Background(), oldToken, auth.ScopeMessageUpdate)
+	if err != nil || principal.InboxID != created.Inbox.ID {
+		t.Fatalf("Authenticate(old) = %+v, error = %v", principal, err)
+	}
+
+	rotated, inbox, err := adapter.RefreshToken(context.Background(), oldToken, created.Inbox.Address)
+	if err != nil {
+		t.Fatalf("RefreshToken() error = %v", err)
+	}
+	if inbox.ID != created.Inbox.ID || rotated.InboxID != created.Inbox.ID || rotated.Plaintext == oldToken {
+		t.Fatalf("rotation = inbox %+v, capability %+v", inbox, rotated)
+	}
+	if _, err := capabilities.Authenticate(context.Background(), oldToken, auth.ScopeInboxRead); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("Authenticate(old after rotation) error = %v", err)
+	}
+	newPrincipal, err := capabilities.Authenticate(context.Background(), rotated.Plaintext, auth.ScopeMessageUpdate)
+	if err != nil || newPrincipal.InboxID != created.Inbox.ID {
+		t.Fatalf("Authenticate(rotated) = %+v, error = %v", newPrincipal, err)
+	}
+}
+
 func TestDuckMailRepositoryPasswordLoginIssuesCanonicalCapability(t *testing.T) {
 	pool := newIntegrationPool(t)
 	resetIntegrationDatabase(t, pool)
@@ -168,11 +228,15 @@ func TestMailboxRepositoryEnforcesOwnershipAndDeletesUnreferencedContent(t *test
 		t.Fatalf("cross-Inbox GetMessage() error = %v", err)
 	}
 	listed, err := repository.ListMessages(context.Background(), first.ID, mailbox.Page{Limit: 10})
-	if err != nil || len(listed.Items) != 1 || listed.Total != 1 || listed.Items[0].ParseStatus != "pending" {
+	if err != nil || len(listed.Items) != 1 || listed.Total != 1 || listed.Unread != 1 || listed.Items[0].ParseStatus != "pending" {
 		t.Fatalf("ListMessages() = %+v, error = %v", listed, err)
 	}
 	if err := repository.MarkMessageSeen(context.Background(), first.ID, messageID, now.Add(time.Minute)); err != nil {
 		t.Fatalf("MarkMessageSeen() error = %v", err)
+	}
+	listed, err = repository.ListMessages(context.Background(), first.ID, mailbox.Page{Limit: 10})
+	if err != nil || listed.Unread != 0 {
+		t.Fatalf("ListMessages(after seen) = %+v, error = %v", listed, err)
 	}
 	detail, err := repository.GetMessage(context.Background(), first.ID, messageID)
 	if err != nil || !detail.Seen {

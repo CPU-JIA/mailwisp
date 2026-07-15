@@ -30,13 +30,30 @@ func TestCreateIssuesOwnerCapabilityAndCleansUpOnFailure(t *testing.T) {
 	if !strings.HasSuffix(created.Inbox.Address, "@mailwisp.test") || created.Capability.Plaintext == "" {
 		t.Fatalf("created = %+v", created)
 	}
-	if !created.Capability.Scopes.Has(auth.ScopeInboxRead, auth.ScopeInboxDelete, auth.ScopeMessageRead, auth.ScopeMessageDelete) {
+	if !created.Capability.Scopes.Has(auth.ScopeInboxRead, auth.ScopeInboxDelete, auth.ScopeMessageRead, auth.ScopeMessageUpdate, auth.ScopeMessageDelete) {
 		t.Fatalf("scopes = %v", created.Capability.Scopes.Names())
 	}
 
 	issuer.err = errors.New("issuer unavailable")
 	if _, err := service.Create(context.Background(), CreateRequest{}); err == nil || repository.purged == "" {
 		t.Fatalf("Create(failed issuer) error = %v, purge = %q", err, repository.purged)
+	}
+}
+
+func TestCreateSupportsValidatedExactLocalPart(t *testing.T) {
+	repository := &repositoryStub{}
+	service, err := NewService(repository, &issuerStub{}, &contentStub{}, Options{
+		PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Create(context.Background(), CreateRequest{LocalPart: "exact_name"})
+	if err != nil || created.Inbox.Address != "exact_name@mailwisp.test" {
+		t.Fatalf("Create(exact) = %+v, error = %v", created, err)
+	}
+	if _, err := service.Create(context.Background(), CreateRequest{LocalPart: "-invalid"}); !errors.Is(err, ErrInvalidLocalPart) {
+		t.Fatalf("Create(invalid local part) error = %v", err)
 	}
 }
 

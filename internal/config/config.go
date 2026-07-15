@@ -57,6 +57,7 @@ type Inbox struct {
 // Compatibility enables isolated third-party HTTP adapters.
 type Compatibility struct {
 	DuckMailEnabled bool
+	YYDSEnabled     bool
 }
 
 // BrowserSession contains optional same-origin Cookie authentication settings.
@@ -120,6 +121,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	yydsEnabled, err := parseBoolean("YYDS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 	postgresDSN, err := postgresDSNWithPasswordFile(value("POSTGRES_DSN", ""), strings.TrimSpace(os.Getenv(prefix+"POSTGRES_PASSWORD_FILE")))
 	if err != nil {
 		return Config{}, err
@@ -179,6 +184,7 @@ func Load() (Config, error) {
 		},
 		Compatibility: Compatibility{
 			DuckMailEnabled: duckMailEnabled,
+			YYDSEnabled:     yydsEnabled,
 		},
 		BrowserSession: BrowserSession{
 			Key:      browserSessionKey,

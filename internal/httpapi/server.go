@@ -23,6 +23,7 @@ import (
 	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
+	"mailwisp/internal/yyds"
 )
 
 // ReadinessChecker verifies whether a dependency can serve requests.
@@ -64,6 +65,7 @@ type Server struct {
 	limiter          *createLimiter
 	trustedProxies   []*net.IPNet
 	duckMail         *duckmail.Service
+	yyds             *yyds.Service
 	metricsHandler   http.Handler
 	metrics          HTTPMetrics
 }
@@ -111,6 +113,19 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("PATCH /compat/duckmail/messages/{id}", server.handleDuckMailSeen)
 	mux.HandleFunc("DELETE /compat/duckmail/messages/{id}", server.handleDuckMailDeleteMessage)
 	mux.HandleFunc("GET /compat/duckmail/sources/{id}", server.handleDuckMailSource)
+	mux.HandleFunc("GET /compat/yyds/v1/domains", server.handleYYDSDomains)
+	mux.HandleFunc("POST /compat/yyds/v1/accounts", server.handleYYDSCreateAccount)
+	mux.HandleFunc("POST /compat/yyds/v1/inboxes", server.handleYYDSCreateAccount)
+	mux.HandleFunc("POST /compat/yyds/v1/token", server.handleYYDSRefreshToken)
+	mux.HandleFunc("GET /compat/yyds/v1/accounts/me", server.handleYYDSAccountMe)
+	mux.HandleFunc("GET /compat/yyds/v1/accounts/{id}", server.handleYYDSAccount)
+	mux.HandleFunc("DELETE /compat/yyds/v1/accounts/{id}", server.handleYYDSAccount)
+	mux.HandleFunc("GET /compat/yyds/v1/messages", server.handleYYDSMessages)
+	mux.HandleFunc("GET /compat/yyds/v1/messages/{id}", server.handleYYDSMessage)
+	mux.HandleFunc("PATCH /compat/yyds/v1/messages/{id}", server.handleYYDSMessage)
+	mux.HandleFunc("DELETE /compat/yyds/v1/messages/{id}", server.handleYYDSMessage)
+	mux.HandleFunc("GET /compat/yyds/v1/sources/{id}", server.handleYYDSSource)
+	mux.HandleFunc("GET /compat/yyds/v1/messages/{id}/attachments/{part}", server.handleYYDSAttachment)
 
 	server.httpServer = &http.Server{
 		Addr:              cfg.Addr,
@@ -140,6 +155,9 @@ func (s *Server) SetBrowserSessions(manager *auth.BrowserSessionManager) {
 
 // SetDuckMailService enables the isolated DuckMail compatibility namespace.
 func (s *Server) SetDuckMailService(service *duckmail.Service) { s.duckMail = service }
+
+// SetYYDSService enables the isolated YYDS Mail compatibility namespace.
+func (s *Server) SetYYDSService(service *yyds.Service) { s.yyds = service }
 
 // SetMetrics enables the internal Prometheus endpoint and request observer.
 func (s *Server) SetMetrics(handler http.Handler, observer HTTPMetrics) {
@@ -498,7 +516,7 @@ func writeMappedError(w http.ResponseWriter, request *http.Request, err error) {
 		writeError(w, request, http.StatusNotImplemented, "not_configured", "browser sessions are not configured")
 	case errors.Is(err, mailbox.ErrInboxNotFound), errors.Is(err, mailbox.ErrMessageNotFound):
 		writeError(w, request, http.StatusNotFound, "not_found", "the requested resource was not found")
-	case errors.Is(err, mailbox.ErrInvalidDomain), errors.Is(err, mailbox.ErrInvalidLifetime):
+	case errors.Is(err, mailbox.ErrInvalidDomain), errors.Is(err, mailbox.ErrInvalidLifetime), errors.Is(err, mailbox.ErrInvalidLocalPart):
 		writeError(w, request, http.StatusBadRequest, "invalid_request", "the Inbox creation request is invalid")
 	case errors.Is(err, mailbox.ErrAddressConflict):
 		writeError(w, request, http.StatusServiceUnavailable, "address_unavailable", "a unique Inbox address could not be allocated")
