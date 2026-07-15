@@ -54,6 +54,7 @@ export const messages = {
       html: '安全 HTML',
       htmlUnavailable: '这封邮件没有 HTML 内容。',
       attachments: '附件',
+      download: '下载',
       privacy: '远程图片、脚本、表单和外部网络请求已被阻止。',
       parsePending: '邮件正在解析，稍后刷新即可查看正文。',
     },
@@ -106,7 +107,7 @@ export const messages = {
     },
     message: {
       back: 'Back to messages', delete: 'Delete this message', text: 'Plain text', html: 'Safe HTML', htmlUnavailable: 'This message has no HTML content.',
-      attachments: 'Attachments', privacy: 'Remote images, scripts, forms, and external network requests are blocked.',
+      attachments: 'Attachments', download: 'Download', privacy: 'Remote images, scripts, forms, and external network requests are blocked.',
       parsePending: 'This message is still being parsed. Refresh in a moment to view its content.',
     },
     error: {

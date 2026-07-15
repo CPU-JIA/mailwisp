@@ -83,3 +83,11 @@ type RawSource struct {
 	Reader io.ReadCloser
 	Size   int64
 }
+
+// AttachmentSource is one owned decoded attachment stream.
+type AttachmentSource struct {
+	Reader      io.ReadCloser
+	FileName    string
+	ContentType string
+	Size        int64
+}

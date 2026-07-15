@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mailwisp/internal/auth"
+	"mailwisp/internal/mail"
 	"mailwisp/internal/message"
 )
 
@@ -54,9 +55,34 @@ func TestCreateRejectsUnknownDomainAndLifetime(t *testing.T) {
 	}
 }
 
+func TestOpenAttachmentValidatesMetadataAndStreamsRawPart(t *testing.T) {
+	parser, err := mail.NewParser(mail.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "Content-Type: multipart/mixed; boundary=x\n\n--x\nContent-Type: text/plain\n\nbody\n--x\nContent-Type: application/octet-stream\nContent-Disposition: attachment; filename=report.txt\n\nattachment\n--x--\n"
+	repository := &repositoryStub{detail: MessageDetail{Attachments: []mail.Attachment{{PartPath: "2", FileName: "report.txt", ContentType: "application/octet-stream", SizeBytes: 10}}}}
+	service, err := NewService(repository, &issuerStub{}, &contentStub{raw: raw}, Options{
+		PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour, AttachmentParser: parser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := service.OpenAttachment(context.Background(), "018f26e5-8f04-7b44-8ba2-4a8f434dcb12", "018f26e5-8f04-7b44-8ba2-4a8f434dcb13", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Reader.Close()
+	content, err := io.ReadAll(source.Reader)
+	if err != nil || string(content) != "attachment" {
+		t.Fatalf("attachment = %q, error = %v", content, err)
+	}
+}
+
 type repositoryStub struct {
 	created mailboxInbox
 	purged  string
+	detail  MessageDetail
 }
 
 type mailboxInbox = Inbox
@@ -79,7 +105,7 @@ func (r *repositoryStub) ListMessages(context.Context, message.InboxID, Page) (M
 	return MessagePage{}, nil
 }
 func (r *repositoryStub) GetMessage(context.Context, message.InboxID, message.MessageID) (MessageDetail, error) {
-	return MessageDetail{}, nil
+	return r.detail, nil
 }
 func (r *repositoryStub) DeleteMessage(context.Context, message.InboxID, message.MessageID) (*message.ContentRef, error) {
 	return nil, nil
@@ -100,11 +126,11 @@ func (s *issuerStub) Issue(_ context.Context, inboxID message.InboxID, scopes au
 	return auth.IssuedCapability{InboxID: inboxID, Plaintext: "test-capability-placeholder", Scopes: scopes, ExpiresAt: expiresAt}, nil
 }
 
-type contentStub struct{}
+type contentStub struct{ raw string }
 
 func (*contentStub) Delete(message.ContentRef) error { return nil }
-func (*contentStub) OpenRaw(context.Context, message.ContentRef) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader("")), nil
+func (s *contentStub) OpenRaw(context.Context, message.ContentRef) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(s.raw)), nil
 }
 
 var _ Repository = (*repositoryStub)(nil)

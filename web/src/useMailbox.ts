@@ -1,7 +1,7 @@
 import { onBeforeUnmount, ref } from 'vue'
 
 import { APIError, MailWispClient } from './api/client'
-import type { Capability, Inbox, MessageDetail, MessageSummary } from './api/types'
+import type { Attachment, Capability, Inbox, MessageDetail, MessageSummary } from './api/types'
 
 export type Phase = 'welcome' | 'creating' | 'issued' | 'opening' | 'inbox' | 'detail' | 'error'
 
@@ -117,6 +117,21 @@ export function useMailbox(client = new MailWispClient()) {
     }
   }
 
+  async function downloadAttachment(attachment: Attachment): Promise<void> {
+    if (!selected.value) return
+    try {
+      const blob = await client.downloadAttachment(token.value, selected.value.id, attachment.part_path)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = attachment.file_name || 'attachment'
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (cause) {
+      handleError(cause)
+    }
+  }
+
   async function deleteInbox(): Promise<void> {
     try {
       await client.deleteInbox(token.value)
@@ -191,6 +206,6 @@ export function useMailbox(client = new MailWispClient()) {
 
   return {
 	phase, token, sessionActive, inbox, issuedCapability, messages, selected, error, refreshing,
-    createInbox, openInbox, refreshMessages, openMessage, closeMessage, deleteMessage, deleteInbox, reset,
+    createInbox, openInbox, refreshMessages, openMessage, closeMessage, deleteMessage, downloadAttachment, deleteInbox, reset,
   }
 }

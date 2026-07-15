@@ -13,3 +13,32 @@ test('renders the Chinese welcome screen and switches language/theme', async ({ 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'mist')
   await expect(page.locator('body')).not.toContainText('undefined')
 })
+
+test('downloads an owned attachment from message detail', async ({ page }) => {
+  const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb12', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
+  const summary = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb13', envelope_sender: 'sender@example.com', subject: 'Attachment', preview: 'See file', received_at: '2026-07-15T00:00:00Z', parse_status: 'parsed', size_bytes: 128, has_attachments: true, seen: false }
+  await page.route('**/api/v1/session', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf' } }) })
+      return
+    }
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unauthenticated', message: 'no session', request_id: 'e2e' } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [summary] }) })
+  })
+  await page.route(`**/api/v1/inboxes/me/messages/${summary.id}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...summary, header_message_id: '', from: [], to: [], cc: [], sent_at: null, text: 'See file', html_source: '', attachments: [{ part_path: '2', file_name: 'report.txt', content_type: 'text/plain', disposition: 'attachment', content_id: '', size_bytes: 10 }], warnings: [] } }) })
+  })
+  await page.route(`**/api/v1/inboxes/me/messages/${summary.id}/attachments/2`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'text/plain', headers: { 'Content-Disposition': 'attachment; filename=report.txt' }, body: 'attachment' })
+  })
+  await page.goto('/')
+  await page.locator('#capability-token').fill('wisp_cap_v1_test')
+  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await page.getByRole('button', { name: /Attachment/ }).click()
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('report.txt')
+})

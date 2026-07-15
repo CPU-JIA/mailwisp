@@ -122,6 +122,9 @@ func (*duckHTTPMailboxStub) ListMessagePage(context.Context, message.InboxID, in
 func (*duckHTTPMailboxStub) GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error) {
 	return mailbox.MessageDetail{}, nil
 }
+func (*duckHTTPMailboxStub) OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error) {
+	return mailbox.AttachmentSource{}, mailbox.ErrMessageNotFound
+}
 func (*duckHTTPMailboxStub) DeleteMessage(context.Context, message.InboxID, message.MessageID) error {
 	return nil
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mailwisp/internal/auth"
+	"mailwisp/internal/mail"
 	"mailwisp/internal/message"
 )
 
@@ -42,9 +43,10 @@ type ContentDeleter interface {
 
 // Options controls anonymous Inbox creation.
 type Options struct {
-	PublicDomains []string
-	DefaultTTL    time.Duration
-	MaxTTL        time.Duration
+	PublicDomains    []string
+	DefaultTTL       time.Duration
+	MaxTTL           time.Duration
+	AttachmentParser *mail.Parser
 }
 
 // CreateRequest selects an allowlisted domain and optional lifetime.
@@ -64,6 +66,7 @@ type Service struct {
 	repository Repository
 	issuer     CapabilityIssuer
 	content    ContentDeleter
+	parser     *mail.Parser
 	domains    []string
 	allowed    map[string]struct{}
 	defaultTTL time.Duration
@@ -100,6 +103,7 @@ func NewService(repository Repository, issuer CapabilityIssuer, content ContentD
 		repository: repository,
 		issuer:     issuer,
 		content:    content,
+		parser:     options.AttachmentParser,
 		domains:    domains,
 		allowed:    allowed,
 		defaultTTL: options.DefaultTTL,
@@ -234,6 +238,40 @@ func (s *Service) OpenSource(ctx context.Context, inboxID message.InboxID, messa
 		return RawSource{}, fmt.Errorf("open Raw MIME: %w", err)
 	}
 	return RawSource{Reader: reader, Size: ref.SizeBytes}, nil
+}
+
+// OpenAttachment opens one owned decoded MIME attachment by PartPath.
+func (s *Service) OpenAttachment(ctx context.Context, inboxID message.InboxID, messageID message.MessageID, partPath string) (AttachmentSource, error) {
+	if s.parser == nil {
+		return AttachmentSource{}, errors.New("attachment parser is not configured")
+	}
+	detail, err := s.repository.GetMessage(ctx, inboxID, messageID)
+	if err != nil {
+		return AttachmentSource{}, err
+	}
+	var selected *mail.Attachment
+	for index := range detail.Attachments {
+		if detail.Attachments[index].PartPath == partPath {
+			selected = &detail.Attachments[index]
+			break
+		}
+	}
+	if selected == nil {
+		return AttachmentSource{}, ErrMessageNotFound
+	}
+	ref, err := s.repository.GetMessageContent(ctx, inboxID, messageID)
+	if err != nil {
+		return AttachmentSource{}, err
+	}
+	raw, err := s.content.OpenRaw(ctx, ref)
+	if err != nil {
+		return AttachmentSource{}, fmt.Errorf("open Raw MIME: %w", err)
+	}
+	stream, err := s.parser.OpenAttachment(ctx, raw, selected.PartPath)
+	if err != nil {
+		return AttachmentSource{}, err
+	}
+	return AttachmentSource{Reader: stream, FileName: selected.FileName, ContentType: selected.ContentType, Size: selected.SizeBytes}, nil
 }
 
 func (s *Service) deleteContent(refs []message.ContentRef) error {

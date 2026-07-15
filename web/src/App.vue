@@ -206,7 +206,7 @@ function errorMessage(code: string): string {
             </div>
             <pre v-if="contentMode === 'text'" class="plain-content">{{ mailbox.selected.value.text || mailbox.selected.value.preview }}</pre>
             <div v-else class="html-content"><p class="privacy-note">◌ {{ t('message.privacy') }}</p><SafeMessageFrame v-if="mailbox.selected.value.html_source" :html="mailbox.selected.value.html_source" :title="mailbox.selected.value.subject" /><p v-else>{{ t('message.htmlUnavailable') }}</p></div>
-            <section v-if="mailbox.selected.value.attachments.length" class="attachments"><h2>{{ t('message.attachments') }}</h2><ul><li v-for="attachment in mailbox.selected.value.attachments" :key="attachment.part_path"><span>{{ attachment.file_name || attachment.content_type }}</span><small>{{ formatBytes(attachment.size_bytes) }}</small></li></ul></section>
+            <section v-if="mailbox.selected.value.attachments.length" class="attachments"><h2>{{ t('message.attachments') }}</h2><ul><li v-for="attachment in mailbox.selected.value.attachments" :key="attachment.part_path"><span>{{ attachment.file_name || attachment.content_type }}</span><span class="attachment-actions"><small>{{ formatBytes(attachment.size_bytes) }}</small><button class="text-button" type="button" @click="mailbox.downloadAttachment(attachment)">{{ t('message.download') }}</button></span></li></ul></section>
           </template>
         </article>
       </template>

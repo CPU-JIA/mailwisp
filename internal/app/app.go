@@ -87,19 +87,20 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create Inbox repository: %w", err)
 	}
-	mailboxService, err := mailbox.NewService(mailboxRepository, capabilityService, store, mailbox.Options{
-		PublicDomains: cfg.Inbox.PublicDomains,
-		DefaultTTL:    cfg.Inbox.DefaultTTL,
-		MaxTTL:        cfg.Inbox.MaxTTL,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create Inbox service: %w", err)
-	}
 	parserLimits := mail.DefaultLimits()
 	parserLimits.MaxRawBytes = cfg.LMTP.MaxMessageBytes
 	parser, err := mail.NewParser(parserLimits)
 	if err != nil {
 		return nil, fmt.Errorf("create MIME parser: %w", err)
+	}
+	mailboxService, err := mailbox.NewService(mailboxRepository, capabilityService, store, mailbox.Options{
+		PublicDomains:    cfg.Inbox.PublicDomains,
+		DefaultTTL:       cfg.Inbox.DefaultTTL,
+		MaxTTL:           cfg.Inbox.MaxTTL,
+		AttachmentParser: parser,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create Inbox service: %w", err)
 	}
 	parserWorker, err := jobs.NewParserWorker(parseRepository, store, parser, logger, jobs.ParserOptions{
 		Workers:       cfg.Parser.Workers,
