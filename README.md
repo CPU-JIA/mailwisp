@@ -61,6 +61,20 @@ go run ./cmd/mailwisp migrate
 go run ./cmd/mailwisp serve
 ```
 
+内容一致性检查必须在MailWisp服务停止后执行。普通检查只报告问题：
+
+```powershell
+go run ./cmd/mailwisp reconcile
+```
+
+确认需要清理无数据库引用的对象时，显式启用Orphan修复：
+
+```powershell
+go run ./cmd/mailwisp reconcile --repair-orphans
+```
+
+`reconcile`通过PostgreSQL独占维护锁阻止并发收件，扫描过程使用有界批次。Orphan可以安全删除；Missing或Corrupt不会自动删除数据库记录，命令会以非零状态退出，等待人工恢复Content或从备份修复。
+
 默认监听：
 
 - HTTP：`:8080`

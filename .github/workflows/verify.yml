@@ -1,0 +1,95 @@
+name: Verify MailWisp
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - docs/research-foundation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-full:
+    name: Linux full verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: go1.26.5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: npm
+          cache-dependency-path: spikes/frontend/package-lock.json
+
+      - name: Install pinned verification tools
+        shell: bash
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          npm install --global npm@11.15.0
+
+      - name: Install Playwright browser dependencies
+        working-directory: spikes/frontend
+        shell: bash
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run repository verification gate
+        shell: pwsh
+        run: ./scripts/verify.ps1
+
+  windows-native:
+    name: Windows native Go verification
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: go1.26.5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go format check
+        shell: pwsh
+        run: |
+          go fmt ./...
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw "whitespace check failed" }
+          if (git status --porcelain) { throw "go fmt changed tracked files" }
+
+      - name: Native tests
+        shell: pwsh
+        run: go test ./...
+
+      - name: Native race tests
+        shell: pwsh
+        run: go test -race ./...
+
+      - name: Native vet
+        shell: pwsh
+        run: go vet ./...

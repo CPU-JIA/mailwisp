@@ -2,29 +2,32 @@ package main
 
 import "testing"
 
-func TestParseRole(t *testing.T) {
+func TestParseCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name      string
 		arguments []string
-		want      string
+		want      command
 		wantError bool
 	}{
-		{name: "default serve", want: "serve"},
-		{name: "explicit serve", arguments: []string{"serve"}, want: "serve"},
-		{name: "migrate", arguments: []string{"migrate"}, want: "migrate"},
+		{name: "default serve", want: command{role: "serve"}},
+		{name: "explicit serve", arguments: []string{"serve"}, want: command{role: "serve"}},
+		{name: "migrate", arguments: []string{"migrate"}, want: command{role: "migrate"}},
+		{name: "reconcile", arguments: []string{"reconcile"}, want: command{role: "reconcile"}},
+		{name: "repair orphans", arguments: []string{"reconcile", "--repair-orphans"}, want: command{role: "reconcile", repairOrphans: true}},
 		{name: "unknown", arguments: []string{"unknown"}, wantError: true},
 		{name: "too many", arguments: []string{"serve", "extra"}, wantError: true},
+		{name: "unknown reconcile flag", arguments: []string{"reconcile", "--force"}, wantError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := parseRole(test.arguments)
+			got, err := parseCommand(test.arguments)
 			if test.wantError && err == nil {
-				t.Fatal("parseRole() error = nil, want error")
+				t.Fatal("parseCommand() error = nil, want error")
 			}
 			if !test.wantError && (err != nil || got != test.want) {
-				t.Fatalf("parseRole() = %q, %v, want %q", got, err, test.want)
+				t.Fatalf("parseCommand() = %+v, %v, want %+v", got, err, test.want)
 			}
 		})
 	}

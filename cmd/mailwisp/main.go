@@ -24,7 +24,7 @@ func main() {
 }
 
 func run(arguments []string) error {
-	role, err := parseRole(arguments)
+	command, err := parseCommand(arguments)
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func run(arguments []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	switch role {
+	switch command.role {
 	case "migrate":
 		if err := postgres.Migrate(ctx, cfg.Postgres.DSN); err != nil {
 			return fmt.Errorf("migrate database: %w", err)
@@ -55,17 +55,30 @@ func run(arguments []string) error {
 			return fmt.Errorf("run application: %w", err)
 		}
 		return nil
+	case "reconcile":
+		if err := app.ReconcileContent(ctx, cfg, logger, command.repairOrphans); err != nil {
+			return fmt.Errorf("reconcile content: %w", err)
+		}
+		return nil
 	default:
-		return fmt.Errorf("unsupported role %q", role)
+		return fmt.Errorf("unsupported role %q", command.role)
 	}
 }
 
-func parseRole(arguments []string) (string, error) {
+type command struct {
+	role          string
+	repairOrphans bool
+}
+
+func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 0 {
-		return "serve", nil
+		return command{role: "serve"}, nil
 	}
-	if len(arguments) != 1 || (arguments[0] != "serve" && arguments[0] != "migrate") {
-		return "", errors.New("usage: mailwisp [serve|migrate]")
+	if len(arguments) == 1 && (arguments[0] == "serve" || arguments[0] == "migrate" || arguments[0] == "reconcile") {
+		return command{role: arguments[0]}, nil
 	}
-	return arguments[0], nil
+	if len(arguments) == 2 && arguments[0] == "reconcile" && arguments[1] == "--repair-orphans" {
+		return command{role: "reconcile", repairOrphans: true}, nil
+	}
+	return command{}, errors.New("usage: mailwisp [serve|migrate|reconcile [--repair-orphans]]")
 }

@@ -101,6 +101,127 @@ func TestMigrateIsIdempotentAndConcurrentSafe(t *testing.T) {
 	}
 }
 
+func TestDeliveryRepositoryWalksContentCatalogInBoundedPages(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	repository := newIntegrationRepository(t, pool)
+	rows := []struct {
+		key  string
+		size int64
+	}{
+		{key: contentKey("a"), size: 1},
+		{key: contentKey("b"), size: 2},
+		{key: contentKey("c"), size: 3},
+	}
+	for _, row := range rows {
+		if _, err := pool.Exec(context.Background(), "INSERT INTO mail_contents (content_key, size_bytes) VALUES ($1, $2)", row.key, row.size); err != nil {
+			t.Fatalf("insert content metadata: %v", err)
+		}
+	}
+
+	var refs []message.ContentRef
+	if err := repository.WalkContentRefs(context.Background(), 2, func(ref message.ContentRef) error {
+		refs = append(refs, ref)
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkContentRefs() error = %v", err)
+	}
+	if len(refs) != len(rows) || refs[0].Key != rows[0].key || refs[2].SizeBytes != rows[2].size {
+		t.Fatalf("WalkContentRefs() = %+v", refs)
+	}
+	existing, err := repository.ExistingContentKeys(context.Background(), []string{rows[0].key, contentKey("d"), rows[2].key})
+	if err != nil {
+		t.Fatalf("ExistingContentKeys() error = %v", err)
+	}
+	if len(existing) != 2 {
+		t.Fatalf("ExistingContentKeys() = %v, want 2 keys", existing)
+	}
+}
+
+func TestMaintenanceLeaseExcludesReconciliationDuringServe(t *testing.T) {
+	pool, err := OpenPool(context.Background(), PoolOptions{
+		DSN:               integrationDataSourceName,
+		MaxConnections:    1,
+		ConnectTimeout:    5 * time.Second,
+		HealthCheckPeriod: time.Minute,
+		MaxConnectionIdle: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("OpenPool(max one) error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	shared, err := AcquireServiceLease(context.Background(), integrationDataSourceName)
+	if err != nil {
+		t.Fatalf("AcquireServiceLease() error = %v", err)
+	}
+	repository := newIntegrationRepository(t, pool)
+	readyContext, readyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := repository.Ready(readyContext); err != nil {
+		readyCancel()
+		t.Fatalf("Ready() with one pooled connection and shared lease error = %v", err)
+	}
+	readyCancel()
+	exclusive, err := TryAcquireMaintenanceLease(context.Background(), integrationDataSourceName)
+	if !errors.Is(err, ErrServiceActive) || exclusive != nil {
+		t.Fatalf("TryAcquireMaintenanceLease() = lease %v, error %v, want ErrServiceActive", exclusive, err)
+	}
+	releaseContext, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := shared.Release(releaseContext); err != nil {
+		releaseCancel()
+		t.Fatalf("release shared lease: %v", err)
+	}
+	releaseCancel()
+
+	exclusive, err = TryAcquireMaintenanceLease(context.Background(), integrationDataSourceName)
+	if err != nil {
+		t.Fatalf("TryAcquireMaintenanceLease(after release) error = %v", err)
+	}
+	blockedContext, blockedCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer blockedCancel()
+	if _, err := AcquireServiceLease(blockedContext, integrationDataSourceName); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AcquireServiceLease(while exclusive) error = %v, want deadline", err)
+	}
+	if err := exclusive.Release(context.Background()); err != nil {
+		t.Fatalf("release exclusive lease: %v", err)
+	}
+}
+
+func TestContentReconciliationWithPostgresCatalog(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	repository := newIntegrationRepository(t, pool)
+	store, err := contentstore.Open(t.TempDir(), contentstore.Options{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("contentstore.Open() error = %v", err)
+	}
+	orphan, err := store.Put(context.Background(), bytes.NewReader([]byte("orphan")))
+	if err != nil {
+		t.Fatalf("store orphan content: %v", err)
+	}
+	missing := contentKey("f")
+	if _, err := pool.Exec(context.Background(), "INSERT INTO mail_contents (content_key, size_bytes) VALUES ($1, $2)", missing, 7); err != nil {
+		t.Fatalf("insert missing metadata: %v", err)
+	}
+
+	summary, err := store.Reconcile(context.Background(), repository, contentstore.ReconcileOptions{BatchSize: 1}, nil)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if summary.Missing != 1 || summary.Orphans != 1 || summary.Unresolved() != 2 {
+		t.Fatalf("report summary = %+v", summary)
+	}
+	summary, err = store.Reconcile(context.Background(), repository, contentstore.ReconcileOptions{BatchSize: 1, RepairOrphans: true}, nil)
+	if err != nil {
+		t.Fatalf("Reconcile(repair) error = %v", err)
+	}
+	if summary.RepairedOrphans != 1 || summary.Unresolved() != 1 {
+		t.Fatalf("repair summary = %+v", summary)
+	}
+	if _, err := store.OpenContent(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repaired orphan OpenContent() error = %v, want not exist", err)
+	}
+}
+
 func TestDeliveryRepositoryCommitsAllRecipients(t *testing.T) {
 	pool := newIntegrationPool(t)
 	resetIntegrationDatabase(t, pool)

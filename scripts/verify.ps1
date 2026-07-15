@@ -75,6 +75,15 @@ try {
 
     Assert-GoToolVersion -CommandName 'gosec' -ModulePath 'github.com/securego/gosec/v2' -Version 'v2.27.1'
     Invoke-Native -Name 'gosec' -Command { gosec -tags=integration ./... }
+    if ($IsWindows) {
+        $previousGoOS = $env:GOOS
+        try {
+            $env:GOOS = 'linux'
+            Invoke-Native -Name 'gosec for linux target' -Command { gosec -tags=integration ./... }
+        } finally {
+            $env:GOOS = $previousGoOS
+        }
+    }
 
     Assert-GoToolVersion -CommandName 'gitleaks' -ModulePath 'github.com/zricethezav/gitleaks/v8' -Version 'v8.30.1'
     Invoke-Native -Name 'gitleaks working tree scan' -Command { gitleaks dir . --no-banner --redact }
