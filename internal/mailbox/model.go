@@ -21,6 +21,8 @@ var (
 	ErrInvalidDomain = errors.New("invalid inbox domain")
 	// ErrInvalidLifetime indicates an unsupported Inbox lifetime.
 	ErrInvalidLifetime = errors.New("invalid inbox lifetime")
+	// ErrInvalidLocalPart indicates an unsupported requested address prefix.
+	ErrInvalidLocalPart = errors.New("invalid inbox local part")
 )
 
 // Inbox is one temporary receiving address.
@@ -72,10 +74,11 @@ type Page struct {
 	Offset int
 }
 
-// MessagePage contains one bounded page and the complete Inbox item count.
+// MessagePage contains one bounded page and complete Inbox counters.
 type MessagePage struct {
-	Items []MessageSummary
-	Total int
+	Items  []MessageSummary
+	Total  int
+	Unread int
 }
 
 // RawSource is one owned immutable RFC 822 message stream.

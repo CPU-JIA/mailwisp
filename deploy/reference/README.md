@@ -59,6 +59,7 @@ MAILWISP_CLEANUP_BATCH_SIZE=100
 MAILWISP_CLEANUP_INTERVAL=0s
 MAILWISP_CLEANUP_TIMEOUT=2m
 MAILWISP_DUCKMAIL_ENABLED=false
+MAILWISP_YYDS_ENABLED=false
 ```
 
 Browser Session Key必须独立随机生成，例如`openssl rand -base64 32`。Browser Session始终使用Secure `__Host-` Cookie，因此本地纯HTTP开发继续使用内存Capability模式。轮换Key会立即退出所有现有浏览器Session，但不会撤销Canonical Capability。

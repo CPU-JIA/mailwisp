@@ -139,15 +139,15 @@ func (r *MailboxRepository) PurgeInbox(ctx context.Context, inboxID message.Inbo
 
 // ListMessages returns a bounded newest-first page for one active Inbox.
 func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.InboxID, page mailbox.Page) (mailbox.MessagePage, error) {
-	var total int
+	var total, unread int
 	if err := r.pool.QueryRow(ctx, `
-		SELECT count(*)
+		SELECT count(*), count(*) FILTER (WHERE message.seen_at IS NULL)
 		FROM messages AS message
 		JOIN inboxes AS inbox ON inbox.id = message.inbox_id
 		WHERE message.inbox_id = $1::uuid
 		  AND inbox.status = 'active'
 		  AND inbox.expires_at > now()
-	`, string(inboxID)).Scan(&total); err != nil {
+	`, string(inboxID)).Scan(&total, &unread); err != nil {
 		return mailbox.MessagePage{}, fmt.Errorf("count Inbox messages: %w", err)
 	}
 	rows, err := r.pool.Query(ctx, `
@@ -180,7 +180,7 @@ func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.In
 	if messages == nil {
 		messages = []mailbox.MessageSummary{}
 	}
-	return mailbox.MessagePage{Items: messages, Total: total}, nil
+	return mailbox.MessagePage{Items: messages, Total: total, Unread: unread}, nil
 }
 
 // GetMessage returns one message only when it belongs to the active Inbox.

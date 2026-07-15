@@ -41,7 +41,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Content.Root != "./data/content" || cfg.Content.MaxBytes != 25<<20 {
 		t.Fatalf("Content defaults = %+v", cfg.Content)
 	}
-	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled {
+	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
 	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour {
@@ -71,11 +71,15 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidCompatibilityBoolean(t *testing.T) {
-	clearConfigurationEnvironment(t)
-	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
-	t.Setenv(prefix+"DUCKMAIL_ENABLED", "sometimes")
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() error = nil, want compatibility boolean parsing error")
+	for _, name := range []string{"DUCKMAIL_ENABLED", "YYDS_ENABLED"} {
+		t.Run(name, func(t *testing.T) {
+			clearConfigurationEnvironment(t)
+			t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+			t.Setenv(prefix+name, "sometimes")
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want compatibility boolean parsing error")
+			}
+		})
 	}
 }
 
@@ -176,6 +180,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_DEFAULT_TTL",
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
+		"YYDS_ENABLED",
 		"BROWSER_SESSION_KEY",
 		"BROWSER_SESSION_KEY_FILE",
 		"BROWSER_SESSION_LIFETIME",

@@ -1,6 +1,6 @@
 # 外部API兼容阶段性矩阵
 
-实现更新（2026-07-15）：DuckMail核心Adapter已在`/compat/duckmail`显式命名空间实现，Contract Fixture与黑盒测试见`internal/httpapi/testdata/duckmail-contract.json`和`docs/compatibility/duckmail.md`。YYDS与Cloudflare仍处于研究边界，不能把DuckMail实现泛化为三方全部兼容。
+实现更新（2026-07-15）：DuckMail核心Adapter已在`/compat/duckmail`实现；YYDS Temporary Inbox核心Adapter已在`/compat/yyds/v1`实现。两者分别具有独立Contract Fixture、黑盒测试和兼容矩阵。Cloudflare仍处于研究边界，不能把任一Adapter泛化为三方全部兼容。
 
 状态：阶段性结论，等待完整Contract复核
 访问日期：2026-07-14

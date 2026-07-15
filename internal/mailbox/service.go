@@ -51,8 +51,9 @@ type Options struct {
 
 // CreateRequest selects an allowlisted domain and optional lifetime.
 type CreateRequest struct {
-	Domain   string
-	Lifetime time.Duration
+	Domain    string
+	LocalPart string
+	Lifetime  time.Duration
 }
 
 // CreatedInbox returns plaintext capability material exactly once.
@@ -131,15 +132,26 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (CreatedInb
 	}
 	now := s.now().UTC()
 	expiresAt := now.Add(lifetime)
+	localPart := strings.ToLower(strings.TrimSpace(request.LocalPart))
+	if localPart != "" && !validLocalPart(localPart) {
+		return CreatedInbox{}, ErrInvalidLocalPart
+	}
 	var inbox Inbox
 	var err error
-	for range maxAddressGenerationAttempts {
-		localPart, generationErr := generateLocalPart(s.random)
-		if generationErr != nil {
-			return CreatedInbox{}, fmt.Errorf("generate Inbox address: %w", generationErr)
+	attempts := maxAddressGenerationAttempts
+	if localPart != "" {
+		attempts = 1
+	}
+	for range attempts {
+		candidate := localPart
+		if candidate == "" {
+			candidate, err = generateLocalPart(s.random)
+			if err != nil {
+				return CreatedInbox{}, fmt.Errorf("generate Inbox address: %w", err)
+			}
 		}
 		inbox, err = s.repository.CreateInbox(ctx, NewInbox{
-			Address: localPart + "@" + domain, ExpiresAt: expiresAt, CreatedAt: now,
+			Address: candidate + "@" + domain, ExpiresAt: expiresAt, CreatedAt: now,
 		})
 		if errors.Is(err, ErrAddressConflict) {
 			continue
@@ -156,6 +168,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (CreatedInb
 		auth.ScopeInboxRead,
 		auth.ScopeInboxDelete,
 		auth.ScopeMessageRead,
+		auth.ScopeMessageUpdate,
 		auth.ScopeMessageDelete,
 	)
 	if err != nil {
@@ -169,6 +182,21 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (CreatedInb
 		return CreatedInbox{}, errors.Join(fmt.Errorf("issue Inbox capability: %w", err), cleanupErr)
 	}
 	return CreatedInbox{Inbox: inbox, Capability: capability}, nil
+}
+
+func validLocalPart(localPart string) bool {
+	if len(localPart) < 1 || len(localPart) > 64 {
+		return false
+	}
+	for index, character := range localPart {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '.' && character != '_' && character != '-' {
+			return false
+		}
+		if (index == 0 || index == len(localPart)-1) && (character == '.' || character == '_' || character == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // Get returns one active Inbox owned by the authenticated principal.
@@ -199,7 +227,7 @@ func (s *Service) ListMessages(ctx context.Context, inboxID message.InboxID, lim
 
 // ListMessagePage returns a compatibility-oriented offset page.
 func (s *Service) ListMessagePage(ctx context.Context, inboxID message.InboxID, limit, offset int) (MessagePage, error) {
-	if limit <= 0 || limit > 100 || offset < 0 {
+	if limit <= 0 || limit > 200 || offset < 0 {
 		return MessagePage{}, errors.New("message page is invalid")
 	}
 	return s.repository.ListMessages(ctx, inboxID, Page{Limit: limit, Offset: offset})
