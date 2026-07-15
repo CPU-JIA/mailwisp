@@ -22,9 +22,11 @@ type Repository interface {
 	GetInbox(context.Context, message.InboxID) (Inbox, error)
 	DeleteInbox(context.Context, message.InboxID) ([]message.ContentRef, error)
 	PurgeInbox(context.Context, message.InboxID) error
-	ListMessages(context.Context, message.InboxID, Page) ([]MessageSummary, error)
+	ListMessages(context.Context, message.InboxID, Page) (MessagePage, error)
 	GetMessage(context.Context, message.InboxID, message.MessageID) (MessageDetail, error)
 	DeleteMessage(context.Context, message.InboxID, message.MessageID) (*message.ContentRef, error)
+	MarkMessageSeen(context.Context, message.InboxID, message.MessageID, time.Time) error
+	GetMessageContent(context.Context, message.InboxID, message.MessageID) (message.ContentRef, error)
 }
 
 // CapabilityIssuer creates one-time plaintext Inbox credentials.
@@ -35,6 +37,7 @@ type CapabilityIssuer interface {
 // ContentDeleter removes unreferenced immutable Raw MIME.
 type ContentDeleter interface {
 	Delete(message.ContentRef) error
+	OpenRaw(context.Context, message.ContentRef) (io.ReadCloser, error)
 }
 
 // Options controls anonymous Inbox creation.
@@ -186,7 +189,16 @@ func (s *Service) ListMessages(ctx context.Context, inboxID message.InboxID, lim
 	if limit > 100 {
 		limit = 100
 	}
-	return s.repository.ListMessages(ctx, inboxID, Page{Limit: limit})
+	page, err := s.repository.ListMessages(ctx, inboxID, Page{Limit: limit})
+	return page.Items, err
+}
+
+// ListMessagePage returns a compatibility-oriented offset page.
+func (s *Service) ListMessagePage(ctx context.Context, inboxID message.InboxID, limit, offset int) (MessagePage, error) {
+	if limit <= 0 || limit > 100 || offset < 0 {
+		return MessagePage{}, errors.New("message page is invalid")
+	}
+	return s.repository.ListMessages(ctx, inboxID, Page{Limit: limit, Offset: offset})
 }
 
 // GetMessage returns one owned message.
@@ -204,6 +216,24 @@ func (s *Service) DeleteMessage(ctx context.Context, inboxID message.InboxID, me
 		return nil
 	}
 	return s.content.Delete(*ref)
+}
+
+// MarkMessageSeen records that one owned message has been opened.
+func (s *Service) MarkMessageSeen(ctx context.Context, inboxID message.InboxID, messageID message.MessageID) error {
+	return s.repository.MarkMessageSeen(ctx, inboxID, messageID, s.now().UTC())
+}
+
+// OpenSource opens one owned immutable RFC 822 source stream.
+func (s *Service) OpenSource(ctx context.Context, inboxID message.InboxID, messageID message.MessageID) (RawSource, error) {
+	ref, err := s.repository.GetMessageContent(ctx, inboxID, messageID)
+	if err != nil {
+		return RawSource{}, err
+	}
+	reader, err := s.content.OpenRaw(ctx, ref)
+	if err != nil {
+		return RawSource{}, fmt.Errorf("open Raw MIME: %w", err)
+	}
+	return RawSource{Reader: reader, Size: ref.SizeBytes}, nil
 }
 
 func (s *Service) deleteContent(refs []message.ContentRef) error {

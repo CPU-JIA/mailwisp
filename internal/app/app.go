@@ -15,6 +15,7 @@ import (
 	"mailwisp/internal/auth"
 	"mailwisp/internal/config"
 	"mailwisp/internal/contentstore"
+	"mailwisp/internal/duckmail"
 	"mailwisp/internal/httpapi"
 	"mailwisp/internal/jobs"
 	"mailwisp/internal/lmtp"
@@ -128,6 +129,21 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	httpServer := httpapi.NewServer(cfg.HTTP, logger)
 	httpServer.SetReadinessChecker(repository)
 	httpServer.SetMailboxService(mailboxService, capabilityService)
+	if cfg.Compatibility.DuckMailEnabled {
+		duckMailRepository, err := postgres.NewDuckMailRepository(pool)
+		if err != nil {
+			return nil, fmt.Errorf("create DuckMail repository: %w", err)
+		}
+		duckMailService, err := duckmail.NewService(duckMailRepository, mailboxService, capabilityService, duckmail.Options{
+			PublicDomains: cfg.Inbox.PublicDomains,
+			DefaultTTL:    cfg.Inbox.DefaultTTL,
+			MaxTTL:        cfg.Inbox.MaxTTL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create DuckMail service: %w", err)
+		}
+		httpServer.SetDuckMailService(duckMailService)
+	}
 
 	cleanupPool = false
 	return &App{

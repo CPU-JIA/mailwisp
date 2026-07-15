@@ -3,6 +3,7 @@ package mailbox
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -74,14 +75,20 @@ func (r *repositoryStub) PurgeInbox(_ context.Context, id message.InboxID) error
 	r.purged = string(id)
 	return nil
 }
-func (r *repositoryStub) ListMessages(context.Context, message.InboxID, Page) ([]MessageSummary, error) {
-	return nil, nil
+func (r *repositoryStub) ListMessages(context.Context, message.InboxID, Page) (MessagePage, error) {
+	return MessagePage{}, nil
 }
 func (r *repositoryStub) GetMessage(context.Context, message.InboxID, message.MessageID) (MessageDetail, error) {
 	return MessageDetail{}, nil
 }
 func (r *repositoryStub) DeleteMessage(context.Context, message.InboxID, message.MessageID) (*message.ContentRef, error) {
 	return nil, nil
+}
+func (r *repositoryStub) MarkMessageSeen(context.Context, message.InboxID, message.MessageID, time.Time) error {
+	return nil
+}
+func (r *repositoryStub) GetMessageContent(context.Context, message.InboxID, message.MessageID) (message.ContentRef, error) {
+	return message.ContentRef{}, nil
 }
 
 type issuerStub struct{ err error }
@@ -96,6 +103,9 @@ func (s *issuerStub) Issue(_ context.Context, inboxID message.InboxID, scopes au
 type contentStub struct{}
 
 func (*contentStub) Delete(message.ContentRef) error { return nil }
+func (*contentStub) OpenRaw(context.Context, message.ContentRef) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
 
 var _ Repository = (*repositoryStub)(nil)
 var _ CapabilityIssuer = (*issuerStub)(nil)
