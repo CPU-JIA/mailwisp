@@ -62,7 +62,9 @@ jobs:
         with:
           node-version: 22.20.0
           cache: npm
-          cache-dependency-path: spikes/frontend/package-lock.json
+          cache-dependency-path: |
+            web/package-lock.json
+            spikes/frontend/package-lock.json
 
       - name: Install pinned verification tools
         shell: bash

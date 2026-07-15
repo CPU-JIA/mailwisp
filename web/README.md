@@ -1,5 +1,15 @@
 # Web应用
 
-MailWisp Web Console将使用TypeScript、ES Module和Vite重构。Node.js只参与开发和Asset构建，生产环境由宿主机Web Server提供静态产物。
+MailWisp Web Console使用Vue 3、TypeScript、vue-i18n与Vite。Node.js只参与开发和Asset构建，生产环境由Web Edge提供静态产物，并将`/api`同源转发至Go应用。
 
-前端必须支持中文与英文切换，并建立Design Token驱动的Light、Dark、Follow System和可扩展主题体系。主题数量服从质量与维护价值，不为数量堆砌重复配色。
+```powershell
+npm ci
+npm run dev
+npm run typecheck
+npm run lint
+npm test
+npm run test:e2e
+npm run build
+```
+
+版本全部固定在`package.json`和`package-lock.json`。Capability Token只保留在页面内存，不写入Local Storage；语言和主题偏好可以本地持久化。邮件HTML经过DOMPurify后放入无权限Sandbox iframe，iframe CSP禁止外部网络请求。
