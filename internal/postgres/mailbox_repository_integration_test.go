@@ -9,11 +9,55 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
+
 	"mailwisp/internal/auth"
 	"mailwisp/internal/contentstore"
+	"mailwisp/internal/duckmail"
 	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
+	"mailwisp/migrations"
 )
+
+func TestDuckMailMigrationUpgradesVersionThreeData(t *testing.T) {
+	dropIntegrationSchema(t)
+	t.Cleanup(func() { recreateIntegrationSchema(t) })
+	config, err := pgx.ParseConfig(integrationDataSourceName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := stdlib.OpenDB(*config)
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = database.Close() })
+	provider, err := goose.NewProvider(goose.DialectPostgres, database, migrations.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(context.Background(), 3); err != nil {
+		t.Fatalf("apply migrations through version 3: %v", err)
+	}
+	if _, err := database.ExecContext(context.Background(), `INSERT INTO inboxes (address) VALUES ('v3@mailwisp.test')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(context.Background(), 4); err != nil {
+		t.Fatalf("apply migration 4: %v", err)
+	}
+	var inboxCount, credentialTable, seenColumn int
+	if err := database.QueryRowContext(context.Background(), `
+		SELECT
+		  (SELECT count(*) FROM inboxes WHERE address = 'v3@mailwisp.test'),
+		  (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'duckmail_credentials'),
+		  (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'seen_at')
+	`).Scan(&inboxCount, &credentialTable, &seenColumn); err != nil {
+		t.Fatal(err)
+	}
+	if inboxCount != 1 || credentialTable != 1 || seenColumn != 1 {
+		t.Fatalf("migration counts = inbox %d table %d column %d", inboxCount, credentialTable, seenColumn)
+	}
+}
 
 func TestMailboxServiceCreatesAuthenticatableInbox(t *testing.T) {
 	pool := newIntegrationPool(t)
@@ -56,6 +100,42 @@ func TestMailboxServiceCreatesAuthenticatableInbox(t *testing.T) {
 	}
 }
 
+func TestDuckMailRepositoryPasswordLoginIssuesCanonicalCapability(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	mailboxRepository, _ := NewMailboxRepository(pool)
+	capabilityRepository, _ := NewInboxCapabilityRepository(pool)
+	capabilities, _ := auth.NewCapabilityService(capabilityRepository)
+	store, err := contentstore.Open(t.TempDir(), contentstore.Options{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxes, err := mailbox.NewService(mailboxRepository, capabilities, store, mailbox.Options{PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	duckRepository, err := NewDuckMailRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := duckmail.NewService(duckRepository, mailboxes, capabilities, duckmail.Options{PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := adapter.CreateAccount(context.Background(), duckmail.CreateAccountRequest{Address: "contract@mailwisp.test", Password: "secret-password"})
+	if err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	issued, err := adapter.Login(context.Background(), created.Address, "secret-password")
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+	principal, err := capabilities.Authenticate(context.Background(), issued.Plaintext, auth.ScopeMessageUpdate)
+	if err != nil || principal.InboxID != created.ID {
+		t.Fatalf("Authenticate() = %+v, error = %v", principal, err)
+	}
+}
+
 func TestMailboxRepositoryEnforcesOwnershipAndDeletesUnreferencedContent(t *testing.T) {
 	pool := newIntegrationPool(t)
 	resetIntegrationDatabase(t, pool)
@@ -88,8 +168,15 @@ func TestMailboxRepositoryEnforcesOwnershipAndDeletesUnreferencedContent(t *test
 		t.Fatalf("cross-Inbox GetMessage() error = %v", err)
 	}
 	listed, err := repository.ListMessages(context.Background(), first.ID, mailbox.Page{Limit: 10})
-	if err != nil || len(listed) != 1 || listed[0].ParseStatus != "pending" {
+	if err != nil || len(listed.Items) != 1 || listed.Total != 1 || listed.Items[0].ParseStatus != "pending" {
 		t.Fatalf("ListMessages() = %+v, error = %v", listed, err)
+	}
+	if err := repository.MarkMessageSeen(context.Background(), first.ID, messageID, now.Add(time.Minute)); err != nil {
+		t.Fatalf("MarkMessageSeen() error = %v", err)
+	}
+	detail, err := repository.GetMessage(context.Background(), first.ID, messageID)
+	if err != nil || !detail.Seen {
+		t.Fatalf("GetMessage(seen) = %+v, error = %v", detail, err)
 	}
 	deletedRef, err := repository.DeleteMessage(context.Background(), first.ID, messageID)
 	if err != nil {

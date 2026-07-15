@@ -135,7 +135,18 @@ func (r *MailboxRepository) PurgeInbox(ctx context.Context, inboxID message.Inbo
 }
 
 // ListMessages returns a bounded newest-first page for one active Inbox.
-func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.InboxID, page mailbox.Page) ([]mailbox.MessageSummary, error) {
+func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.InboxID, page mailbox.Page) (mailbox.MessagePage, error) {
+	var total int
+	if err := r.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM messages AS message
+		JOIN inboxes AS inbox ON inbox.id = message.inbox_id
+		WHERE message.inbox_id = $1::uuid
+		  AND inbox.status = 'active'
+		  AND inbox.expires_at > now()
+	`, string(inboxID)).Scan(&total); err != nil {
+		return mailbox.MessagePage{}, fmt.Errorf("count Inbox messages: %w", err)
+	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT message.id::text,
 		       message.envelope_sender,
@@ -144,7 +155,8 @@ func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.In
 		       message.received_at,
 		       content.parse_status,
 		       content.size_bytes,
-		       COALESCE(jsonb_array_length(parsed.attachments), 0) > 0
+		       COALESCE(jsonb_array_length(parsed.attachments), 0) > 0,
+		       message.seen_at IS NOT NULL
 		FROM messages AS message
 		JOIN inboxes AS inbox ON inbox.id = message.inbox_id
 		JOIN mail_contents AS content ON content.content_key = message.content_key
@@ -153,19 +165,19 @@ func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.In
 		  AND inbox.status = 'active'
 		  AND inbox.expires_at > now()
 		ORDER BY message.received_at DESC, message.id DESC
-		LIMIT $2
-	`, string(inboxID), page.Limit)
+		LIMIT $2 OFFSET $3
+	`, string(inboxID), page.Limit, page.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("list Inbox messages: %w", err)
+		return mailbox.MessagePage{}, fmt.Errorf("list Inbox messages: %w", err)
 	}
 	messages, err := pgx.CollectRows(rows, pgx.RowToStructByPos[mailbox.MessageSummary])
 	if err != nil {
-		return nil, fmt.Errorf("collect Inbox messages: %w", err)
+		return mailbox.MessagePage{}, fmt.Errorf("collect Inbox messages: %w", err)
 	}
 	if messages == nil {
 		messages = []mailbox.MessageSummary{}
 	}
-	return messages, nil
+	return mailbox.MessagePage{Items: messages, Total: total}, nil
 }
 
 // GetMessage returns one message only when it belongs to the active Inbox.
@@ -181,6 +193,7 @@ func (r *MailboxRepository) GetMessage(ctx context.Context, inboxID message.Inbo
 		       content.parse_status,
 		       content.size_bytes,
 		       COALESCE(jsonb_array_length(parsed.attachments), 0) > 0,
+		       message.seen_at IS NOT NULL,
 		       COALESCE(parsed.header_message_id, ''),
 		       COALESCE(parsed.from_addresses, '[]'::jsonb),
 		       COALESCE(parsed.to_addresses, '[]'::jsonb),
@@ -207,6 +220,7 @@ func (r *MailboxRepository) GetMessage(ctx context.Context, inboxID message.Inbo
 		&detail.ParseStatus,
 		&detail.SizeBytes,
 		&detail.HasAttachments,
+		&detail.Seen,
 		&detail.HeaderMessageID,
 		&fromJSON,
 		&toJSON,
@@ -245,6 +259,49 @@ func (r *MailboxRepository) GetMessage(ctx context.Context, inboxID message.Inbo
 		}
 	}
 	return detail, nil
+}
+
+// MarkMessageSeen records that an owned message was opened.
+func (r *MailboxRepository) MarkMessageSeen(ctx context.Context, inboxID message.InboxID, messageID message.MessageID, seenAt time.Time) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE messages AS message
+		SET seen_at = COALESCE(message.seen_at, $3)
+		FROM inboxes AS inbox
+		WHERE message.id = $2::uuid
+		  AND message.inbox_id = $1::uuid
+		  AND inbox.id = message.inbox_id
+		  AND inbox.status = 'active'
+		  AND inbox.expires_at > now()
+	`, string(inboxID), string(messageID), seenAt.UTC())
+	if err != nil {
+		return fmt.Errorf("mark Inbox message seen: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return mailbox.ErrMessageNotFound
+	}
+	return nil
+}
+
+// GetMessageContent returns one owned Raw MIME reference.
+func (r *MailboxRepository) GetMessageContent(ctx context.Context, inboxID message.InboxID, messageID message.MessageID) (message.ContentRef, error) {
+	var ref message.ContentRef
+	err := r.pool.QueryRow(ctx, `
+		SELECT content.content_key, content.size_bytes
+		FROM messages AS message
+		JOIN inboxes AS inbox ON inbox.id = message.inbox_id
+		JOIN mail_contents AS content ON content.content_key = message.content_key
+		WHERE message.id = $2::uuid
+		  AND message.inbox_id = $1::uuid
+		  AND inbox.status = 'active'
+		  AND inbox.expires_at > now()
+	`, string(inboxID), string(messageID)).Scan(&ref.Key, &ref.SizeBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return message.ContentRef{}, mailbox.ErrMessageNotFound
+	}
+	if err != nil {
+		return message.ContentRef{}, fmt.Errorf("read Inbox message content: %w", err)
+	}
+	return ref, nil
 }
 
 // DeleteMessage removes one owned message and returns newly unreferenced Raw MIME.

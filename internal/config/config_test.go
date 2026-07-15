@@ -39,6 +39,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Content.Root != "./data/content" || cfg.Content.MaxBytes != 25<<20 {
 		t.Fatalf("Content defaults = %+v", cfg.Content)
 	}
+	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled {
+		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
+	}
 }
 
 func TestLoadRejectsInvalidLimits(t *testing.T) {
@@ -56,6 +59,15 @@ func TestLoadRejectsInvalidLogLevel(t *testing.T) {
 	t.Setenv(prefix+"LOG_LEVEL", "extremely-loud")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want parsing error")
+	}
+}
+
+func TestLoadRejectsInvalidCompatibilityBoolean(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"DUCKMAIL_ENABLED", "sometimes")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want compatibility boolean parsing error")
 	}
 }
 
@@ -108,6 +120,13 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"IDLE_TIMEOUT",
 		"MAX_HEADER_BYTES",
 		"READINESS_TIMEOUT",
+		"CREATE_RATE_PER_MINUTE",
+		"CREATE_RATE_BURST",
+		"TRUSTED_PROXY_CIDRS",
+		"PUBLIC_DOMAINS",
+		"INBOX_DEFAULT_TTL",
+		"INBOX_MAX_TTL",
+		"DUCKMAIL_ENABLED",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",
 		"LMTP_MAX_MESSAGE_BYTES",
