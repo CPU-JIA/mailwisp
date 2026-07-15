@@ -73,7 +73,7 @@ Content Hash用于物理去重，但每次SMTP投递仍创建独立Message Recor
 - PostgreSQL Commit成功后、外部确认前被强制终止时，数据库与Object保持一致；模拟重投后复用1份Content并形成2条Message，保留重复投递语义。
 - 严格三文件Backup Bundle与空目标Restore已经通过PostgreSQL 18.4普通及Race Integration；恢复前验证Manifest、大小与SHA-256，恢复后执行数据库/Content一致性检查。
 - 固定Postfix 3.11.5真实验证LMTP不可达排队、Queue Volume跨重启、4xx重投、确认丢失重复Message和未知Recipient永久失败。
-- 纯Go有界流式MIME Parser已经实现Raw、Header、Part、Depth、Decoded Bytes、Text/HTML Preview和Attachment Metadata边界；Parser Worker持久化尚未接入。
+- 纯Go有界流式MIME Parser已经实现Raw、Header、Part、Depth、Decoded Bytes、Text/HTML Preview和Attachment Metadata边界；Content级Parser Worker持久化已经接入，具体协议见ADR 0009。
 
 仍未完成，因此ADR保持“提议中”：
 
