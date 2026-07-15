@@ -71,10 +71,12 @@ Content Hash用于物理去重，但每次SMTP投递仍创建独立Message Recor
 - 固定Linux/amd64环境中，Content Store强杀恢复普通测试10轮与Race测试3轮通过。
 - PostgreSQL Transaction在Commit前被强制终止后自动回滚，数据库保持0 Content/0 Message，已落盘Object由Reconciliation清理。
 - PostgreSQL Commit成功后、外部确认前被强制终止时，数据库与Object保持一致；模拟重投后复用1份Content并形成2条Message，保留重复投递语义。
+- 严格三文件Backup Bundle与空目标Restore已经通过PostgreSQL 18.4普通及Race Integration；恢复前验证Manifest、大小与SHA-256，恢复后执行数据库/Content一致性检查。
+- 固定Postfix 3.11.5真实验证LMTP不可达排队、Queue Volume跨重启、4xx重投、确认丢失重复Message和未知Recipient永久失败。
+- 纯Go有界流式MIME Parser已经实现Raw、Header、Part、Depth、Decoded Bytes、Text/HTML Preview和Attachment Metadata边界；Parser Worker持久化尚未接入。
 
 仍未完成，因此ADR保持“提议中”：
 
 - 真实Linux生产文件系统或VM在断电/硬重启下的目录与文件持久性演练；进程强杀不能替代掉电证明。
-- 真实Postfix队列重投与应用重启验证。
-- 数据库与Content Store一致性备份和恢复演练。
 - Linux生产文件系统上的容量、目录数量与尾延迟Benchmark。
+- Parser Worker领取、重试、结果持久化与恶意邮件Corpus峰值RSS验证。

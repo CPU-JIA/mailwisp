@@ -3,6 +3,7 @@ module mailwisp
 go 1.26.5
 
 require (
+	github.com/emersion/go-message v0.18.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/moby/moby/api v1.55.0
