@@ -23,6 +23,7 @@ import (
 	"mailwisp/internal/mailbox"
 	"mailwisp/internal/message"
 	"mailwisp/internal/postgres"
+	"mailwisp/internal/telemetry"
 )
 
 // App owns the process lifecycle and concrete service composition.
@@ -63,6 +64,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("open content store: %w", err)
 	}
+	metrics := telemetry.NewMetrics(pool)
 	repository, err := postgres.NewDeliveryRepository(pool)
 	if err != nil {
 		return nil, fmt.Errorf("create delivery repository: %w", err)
@@ -114,6 +116,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create parser worker: %w", err)
 	}
+	parserWorker.SetMetrics(metrics)
 	var retention *jobs.Retention
 	if cfg.Cleanup.Interval > 0 {
 		retention, err = jobs.NewRetention(mailboxRepository, store, logger, jobs.RetentionOptions{
@@ -124,6 +127,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		if err != nil {
 			return nil, fmt.Errorf("create retention job: %w", err)
 		}
+		retention.SetMetrics(metrics)
 	}
 	lmtpReceiver := &wakingReceiver{receiver: receiver, wake: parserWorker.Notify}
 	lmtpServer, err := lmtp.NewServer(lmtp.Options{
@@ -139,7 +143,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return nil, fmt.Errorf("create LMTP server: %w", err)
 	}
+	lmtpServer.SetMetrics(metrics)
 	httpServer := httpapi.NewServer(cfg.HTTP, logger)
+	httpServer.SetMetrics(metrics.Handler(), metrics)
 	httpServer.SetReadinessChecker(repository)
 	httpServer.SetMailboxService(mailboxService, capabilityService)
 	if len(cfg.BrowserSession.Key) != 0 {

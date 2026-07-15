@@ -61,6 +61,10 @@ server {
         proxy_set_header X-Forwarded-For $remote_addr;
     }
 
+    location = /metrics {
+        return 404;
+    }
+
     location /assets/ {
         try_files $uri =404;
         expires 1y;

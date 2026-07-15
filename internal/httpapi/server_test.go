@@ -70,6 +70,26 @@ func TestLivenessDoesNotDependOnReadiness(t *testing.T) {
 	}
 }
 
+func TestMetricsUseRoutePatternAndRequireExplicitHandler(t *testing.T) {
+	server := NewServer(config.HTTP{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("disabled metrics status = %d", recorder.Code)
+	}
+	observer := &httpMetricsStub{}
+	server.SetMetrics(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "metrics") }), observer)
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "metrics" {
+		t.Fatalf("metrics response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if observer.route != "GET /metrics" {
+		t.Fatalf("observed route = %q", observer.route)
+	}
+}
+
 func TestCanonicalInboxAPIRequiresCapabilityAndReturnsRequestID(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := NewServer(config.HTTP{ReadinessTimeout: time.Second, CreateRatePerMinute: 60, CreateRateBurst: 2}, logger)
@@ -180,6 +200,12 @@ func TestAttachmentDownloadStreamsOwnedContent(t *testing.T) {
 
 type readinessStub struct {
 	err error
+}
+
+type httpMetricsStub struct{ route string }
+
+func (s *httpMetricsStub) ObserveHTTPRequest(_, route string, _ int, _ time.Duration) {
+	s.route = route
 }
 
 type authStub struct{}

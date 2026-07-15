@@ -33,13 +33,22 @@ type RetentionSummary struct {
 	ContentDeleted int
 }
 
+// RetentionMetrics observes fixed sweep outcomes and bounded counts.
+type RetentionMetrics interface {
+	ObserveRetention(result string, inboxes, content int)
+}
+
 // Retention runs periodic Inbox expiration without making one failed sweep fatal to the service.
 type Retention struct {
 	repository RetentionRepository
 	content    RetentionContentStore
 	logger     *slog.Logger
 	options    RetentionOptions
+	metrics    RetentionMetrics
 }
+
+// SetMetrics enables retention sweep observations.
+func (r *Retention) SetMetrics(metrics RetentionMetrics) { r.metrics = metrics }
 
 // NewRetention constructs a bounded retention job.
 func NewRetention(repository RetentionRepository, content RetentionContentStore, logger *slog.Logger, options RetentionOptions) (*Retention, error) {
@@ -99,8 +108,14 @@ func (r *Retention) runSweep(ctx context.Context) {
 	defer cancel()
 	summary, err := r.Sweep(sweepContext)
 	if err != nil {
+		if r.metrics != nil {
+			r.metrics.ObserveRetention("error", summary.InboxesDeleted, summary.ContentDeleted)
+		}
 		r.logger.ErrorContext(ctx, "retention sweep failed", "error", err)
 		return
+	}
+	if r.metrics != nil {
+		r.metrics.ObserveRetention("success", summary.InboxesDeleted, summary.ContentDeleted)
 	}
 	r.logger.InfoContext(ctx, "retention sweep complete", "inboxes_deleted", summary.InboxesDeleted, "content_deleted", summary.ContentDeleted)
 }

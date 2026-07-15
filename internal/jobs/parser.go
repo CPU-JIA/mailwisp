@@ -66,6 +66,11 @@ type MIMEParser interface {
 	Parse(context.Context, io.Reader) (mail.ParsedMessage, error)
 }
 
+// ParserMetrics observes fixed parser outcome labels.
+type ParserMetrics interface {
+	ObserveParser(string, time.Duration)
+}
+
 // ParserOptions configures bounded Parser Worker concurrency and retry behavior.
 type ParserOptions struct {
 	Workers       int
@@ -86,7 +91,11 @@ type ParserWorker struct {
 	options ParserOptions
 	wake    chan struct{}
 	now     func() time.Time
+	metrics ParserMetrics
 }
+
+// SetMetrics enables parser work observations.
+func (w *ParserWorker) SetMetrics(metrics ParserMetrics) { w.metrics = metrics }
 
 // NewParserWorker constructs a durable Parser Worker.
 func NewParserWorker(queue ParseQueue, source RawSource, parser MIMEParser, logger *slog.Logger, options ParserOptions) (*ParserWorker, error) {
@@ -180,6 +189,13 @@ func (w *ParserWorker) processNext(ctx context.Context) (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
+	started := time.Now()
+	result := "error"
+	defer func() {
+		if w.metrics != nil {
+			w.metrics.ObserveParser(result, time.Since(started))
+		}
+	}()
 
 	parseContext, cancel := context.WithTimeout(ctx, w.options.ParseTimeout)
 	parsed, parseErr := w.parseClaim(parseContext, claim)
@@ -187,6 +203,7 @@ func (w *ParserWorker) processNext(ctx context.Context) (bool, error) {
 	cancel()
 
 	if ctx.Err() != nil {
+		result = "canceled"
 		w.releaseAfterCancellation(claim)
 		return true, ctx.Err()
 	}
@@ -196,6 +213,7 @@ func (w *ParserWorker) processNext(ctx context.Context) (bool, error) {
 		if err := w.queue.CompleteContent(finishContext, claim, mail.ParserRevision, parsed, w.now().UTC()); err != nil {
 			return true, fmt.Errorf("complete parsed content: %w", err)
 		}
+		result = "success"
 		w.logger.Debug("content parsed", "content_key", claim.Content.Key, "attempt", claim.Attempt)
 		return true, nil
 	}
@@ -207,6 +225,7 @@ func (w *ParserWorker) processNext(ctx context.Context) (bool, error) {
 		if err := w.queue.FailContent(finishContext, claim, code, w.now().UTC()); err != nil {
 			return true, fmt.Errorf("record content parse failure: %w", err)
 		}
+		result = "failed"
 		w.logger.Warn("content parsing failed", "content_key", claim.Content.Key, "attempt", claim.Attempt, "code", code)
 		return true, nil
 	}
@@ -214,6 +233,7 @@ func (w *ParserWorker) processNext(ctx context.Context) (bool, error) {
 	if err := w.queue.RetryContent(finishContext, claim, code, availableAt); err != nil {
 		return true, fmt.Errorf("schedule content parse retry: %w", err)
 	}
+	result = "retry"
 	w.logger.Warn("content parsing scheduled for retry", "content_key", claim.Content.Key, "attempt", claim.Attempt, "code", code, "available_at", availableAt)
 	return true, nil
 }

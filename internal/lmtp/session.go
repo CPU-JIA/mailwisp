@@ -211,6 +211,9 @@ func (s *session) receiveData(ctx context.Context) error {
 	}
 
 	code, enhanced, text := classifyDeliveryError(receiveErr)
+	if s.server.metrics != nil {
+		s.server.metrics.ObserveLMTPDelivery(code)
+	}
 	for _, recipient := range s.recipients {
 		if err := s.reply(code, enhanced, recipient.address+" "+text); err != nil {
 			return err

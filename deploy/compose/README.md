@@ -45,6 +45,14 @@ docker compose logs --tail=100 app postfix edge
 
 `migrate`是一次性服务；`app`只有在Migration成功后启动，Edge和Postfix只有在App Readiness通过后启动。默认不运行Redis、PgBouncer、消息队列或生产Node.js。
 
+内部Metrics不通过Edge公开。临时诊断可执行：
+
+```bash
+docker compose exec app wget -qO- http://127.0.0.1:8080/metrics
+```
+
+长期采集应让既有Prometheus或兼容Collector加入Compose内部Network，不得把`/metrics`直接暴露到公网。
+
 ## 4. 证书续签
 
 由Host Cron或systemd Timer定期执行：
