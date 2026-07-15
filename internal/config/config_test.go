@@ -2,6 +2,8 @@ package config
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -42,7 +44,7 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
-	if cfg.Cleanup.BatchSize != 100 {
+	if cfg.Cleanup.BatchSize != 100 || cfg.Cleanup.Interval != 5*time.Minute || cfg.Cleanup.Timeout != 2*time.Minute {
 		t.Fatalf("Cleanup defaults = %+v", cfg.Cleanup)
 	}
 }
@@ -78,6 +80,23 @@ func TestLoadRequiresPostgresDSN(t *testing.T) {
 	clearConfigurationEnvironment(t)
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want missing PostgreSQL DSN error")
+	}
+}
+
+func TestLoadPostgresPasswordFile(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	path := filepath.Join(t.TempDir(), "postgres-password")
+	if err := os.WriteFile(path, []byte("p@ss word\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"POSTGRES_PASSWORD_FILE", path)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Postgres.DSN != "postgres://mailwisp:p%40ss%20word@postgres:5432/mailwisp?sslmode=disable" {
+		t.Fatalf("Postgres.DSN = %q", cfg.Postgres.DSN)
 	}
 }
 
@@ -131,6 +150,8 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
 		"CLEANUP_BATCH_SIZE",
+		"CLEANUP_INTERVAL",
+		"CLEANUP_TIMEOUT",
 		"LMTP_ADDR",
 		"LMTP_HOSTNAME",
 		"LMTP_MAX_MESSAGE_BYTES",
@@ -148,6 +169,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"PARSER_RETRY_BASE",
 		"PARSER_RETRY_MAX",
 		"POSTGRES_DSN",
+		"POSTGRES_PASSWORD_FILE",
 		"POSTGRES_MIN_CONNECTIONS",
 		"POSTGRES_MAX_CONNECTIONS",
 		"POSTGRES_CONNECT_TIMEOUT",

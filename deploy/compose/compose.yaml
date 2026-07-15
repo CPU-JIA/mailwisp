@@ -1,0 +1,201 @@
+name: mailwisp
+
+x-app-build: &app-build
+  context: ../..
+  dockerfile: deploy/compose/Dockerfile
+  target: app
+
+x-app-environment: &app-environment
+  MAILWISP_HTTP_ADDR: ":8080"
+  MAILWISP_LMTP_ADDR: ":2525"
+  MAILWISP_POSTGRES_DSN: postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable
+  MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content
+
+services:
+  postgres:
+    image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mailwisp
+      POSTGRES_USER: mailwisp
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    tmpfs:
+      - /run/postgresql:size=16m,mode=0770
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailwisp -d mailwisp"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "2.0"
+
+  migrate:
+    image: mailwisp/app:${MAILWISP_IMAGE_TAG:-local}
+    build: *app-build
+    command: ["migrate"]
+    environment: *app-environment
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+    restart: "no"
+
+  app:
+    image: mailwisp/app:${MAILWISP_IMAGE_TAG:-local}
+    build: *app-build
+    restart: unless-stopped
+    env_file:
+      - path: ${MAILWISP_ENV_FILE:-./mailwisp.env}
+        required: true
+    environment:
+      <<: *app-environment
+    secrets:
+      - postgres_password
+    volumes:
+      - content_data:/var/lib/mailwisp/content
+      - ./backups:/backups
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+      - frontend
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "2.0"
+          pids: 256
+
+  edge:
+    image: mailwisp/edge:${MAILWISP_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+      target: edge
+    restart: unless-stopped
+    environment:
+      MAILWISP_WEB_DOMAIN: ${MAILWISP_WEB_DOMAIN:?set MAILWISP_WEB_DOMAIN}
+      MAILWISP_CERT_NAME: ${MAILWISP_CERT_NAME:?set MAILWISP_CERT_NAME}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+      - acme_webroot:/var/www/certbot:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=32m,mode=0755
+      - /var/run:size=4m,mode=0755
+      - /etc/nginx/conf.d:size=4m,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - frontend
+    deploy:
+      resources:
+        limits:
+          memory: 96m
+          cpus: "1.0"
+          pids: 128
+
+  postfix:
+    image: mailwisp/postfix:${MAILWISP_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/postfix/Dockerfile
+    restart: unless-stopped
+    environment:
+      MAILWISP_SMTP_HOST: ${MAILWISP_SMTP_HOST:?set MAILWISP_SMTP_HOST}
+      MAILWISP_MAIL_DOMAIN: ${MAILWISP_MAIL_DOMAIN:?set MAILWISP_MAIL_DOMAIN}
+      MAILWISP_CERT_NAME: ${MAILWISP_CERT_NAME:?set MAILWISP_CERT_NAME}
+    ports:
+      - "25:25"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+      - postfix_queue:/var/spool/postfix
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "postfix status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 192m
+          cpus: "1.0"
+          pids: 256
+
+  certbot:
+    image: certbot/certbot:v5.6.0@sha256:0107d084c225631fc64a8313e19adb07275f7296fde338f7dfa93986c80b2e3e
+    profiles: ["tools"]
+    ports:
+      - "80:80"
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme_webroot:/var/www/certbot
+    networks:
+      - frontend
+
+secrets:
+  postgres_password:
+    file: ${MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE:-./secrets/postgres_password.txt}
+
+volumes:
+  postgres_data:
+  content_data:
+  postfix_queue:
+  letsencrypt:
+  acme_webroot:
+
+networks:
+  backend:
+    internal: true
+  frontend:

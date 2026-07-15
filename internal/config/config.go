@@ -4,8 +4,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -57,6 +59,8 @@ type Compatibility struct {
 // Cleanup contains bounded retention settings.
 type Cleanup struct {
 	BatchSize int
+	Interval  time.Duration
+	Timeout   time.Duration
 }
 
 // LMTP contains local delivery protocol limits and timeouts.
@@ -107,6 +111,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	postgresDSN, err := postgresDSNWithPasswordFile(value("POSTGRES_DSN", ""), strings.TrimSpace(os.Getenv(prefix+"POSTGRES_PASSWORD_FILE")))
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		HTTP: HTTP{
@@ -142,7 +150,7 @@ func Load() (Config, error) {
 			RetryMax:      duration("PARSER_RETRY_MAX", 5*time.Minute),
 		},
 		Postgres: Postgres{
-			DSN:            value("POSTGRES_DSN", ""),
+			DSN:            postgresDSN,
 			MinConnections: integer32("POSTGRES_MIN_CONNECTIONS", 1),
 			MaxConnections: integer32("POSTGRES_MAX_CONNECTIONS", 10),
 			ConnectTimeout: duration("POSTGRES_CONNECT_TIMEOUT", 5*time.Second),
@@ -159,7 +167,11 @@ func Load() (Config, error) {
 		Compatibility: Compatibility{
 			DuckMailEnabled: duckMailEnabled,
 		},
-		Cleanup:         Cleanup{BatchSize: integer("CLEANUP_BATCH_SIZE", 100)},
+		Cleanup: Cleanup{
+			BatchSize: integer("CLEANUP_BATCH_SIZE", 100),
+			Interval:  duration("CLEANUP_INTERVAL", 5*time.Minute),
+			Timeout:   duration("CLEANUP_TIMEOUT", 2*time.Minute),
+		},
 		LogLevel:        logLevel,
 		ShutdownTimeout: duration("SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
@@ -294,6 +306,12 @@ func (c Config) Validate() error {
 	if c.Cleanup.BatchSize <= 0 || c.Cleanup.BatchSize > 1000 {
 		errs = append(errs, errors.New("MAILWISP_CLEANUP_BATCH_SIZE must be between 1 and 1000"))
 	}
+	if c.Cleanup.Interval < 0 || c.Cleanup.Interval > 24*time.Hour {
+		errs = append(errs, errors.New("MAILWISP_CLEANUP_INTERVAL must be between 0 and 24h"))
+	}
+	if c.Cleanup.Interval > 0 && (c.Cleanup.Timeout <= 0 || c.Cleanup.Timeout >= c.Cleanup.Interval) {
+		errs = append(errs, errors.New("MAILWISP_CLEANUP_TIMEOUT must be positive and shorter than MAILWISP_CLEANUP_INTERVAL"))
+	}
 	return errors.Join(errs...)
 }
 
@@ -385,4 +403,29 @@ func parseLogLevel(raw string) (slog.Level, error) {
 		return 0, fmt.Errorf("MAILWISP_LOG_LEVEL: %w", err)
 	}
 	return level, nil
+}
+
+func postgresDSNWithPasswordFile(dsn, passwordFile string) (string, error) {
+	if passwordFile == "" {
+		return dsn, nil
+	}
+	file, err := os.Open(passwordFile)
+	if err != nil {
+		return "", fmt.Errorf("MAILWISP_POSTGRES_PASSWORD_FILE: %w", err)
+	}
+	defer file.Close()
+	passwordBytes, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil {
+		return "", fmt.Errorf("read MAILWISP_POSTGRES_PASSWORD_FILE: %w", err)
+	}
+	password := strings.TrimSpace(string(passwordBytes))
+	if password == "" || len(passwordBytes) > 4096 || strings.ContainsRune(password, '\x00') {
+		return "", errors.New("MAILWISP_POSTGRES_PASSWORD_FILE must contain 1 to 4096 non-NUL bytes")
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Scheme == "" || parsed.User == nil || parsed.User.Username() == "" {
+		return "", errors.New("MAILWISP_POSTGRES_DSN must be a URL with a username when password file is configured")
+	}
+	parsed.User = url.UserPassword(parsed.User.Username(), password)
+	return parsed.String(), nil
 }
