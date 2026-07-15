@@ -305,6 +305,124 @@ func TestDeliveryRepositoryResolveInbox(t *testing.T) {
 	}
 }
 
+func TestDeliveryRepositoryPreflightsInboxQuotasBeforeData(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	inboxID := createInbox(t, pool, "quota@example.com")
+	repository, err := NewDeliveryRepositoryWithLimits(pool, DeliveryLimits{MaxInboxMessages: 2, MaxInboxStorageBytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("q"), 8)); err != nil {
+		t.Fatalf("first CommitDelivery() error = %v", err)
+	}
+	if _, err := repository.ResolveInboxForDelivery(context.Background(), "quota@example.com", 2); err != nil {
+		t.Fatalf("ResolveInboxForDelivery(exact bytes) error = %v", err)
+	}
+	if _, err := repository.ResolveInboxForDelivery(context.Background(), "quota@example.com", 3); !errors.Is(err, message.ErrInboxStorageQuotaExceeded) {
+		t.Fatalf("ResolveInboxForDelivery(bytes) error = %v", err)
+	}
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("r"), 2)); err != nil {
+		t.Fatalf("second CommitDelivery() error = %v", err)
+	}
+	if _, err := repository.ResolveInboxForDelivery(context.Background(), "quota@example.com", 0); !errors.Is(err, message.ErrInboxMessageQuotaExceeded) {
+		t.Fatalf("ResolveInboxForDelivery(messages) error = %v", err)
+	}
+}
+
+func TestDeliveryRepositoryEnforcesQuotaAtomicallyUnderConcurrency(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	inboxID := createInbox(t, pool, "concurrent-quota@example.com")
+	repository, err := NewDeliveryRepositoryWithLimits(pool, DeliveryLimits{MaxInboxMessages: 1, MaxInboxStorageBytes: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errorsChannel := make(chan error, 2)
+	for _, key := range []string{contentKey("s"), contentKey("t")} {
+		go func(content string) {
+			<-start
+			_, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, content, 10))
+			errorsChannel <- err
+		}(key)
+	}
+	close(start)
+	var success, quota int
+	for range 2 {
+		err := <-errorsChannel
+		if err == nil {
+			success++
+		} else if errors.Is(err, message.ErrInboxMessageQuotaExceeded) {
+			quota++
+		} else {
+			t.Fatalf("CommitDelivery() unexpected error = %v", err)
+		}
+	}
+	if success != 1 || quota != 1 {
+		t.Fatalf("delivery outcomes success=%d quota=%d", success, quota)
+	}
+	assertCounts(t, pool, 1, 1)
+}
+
+func TestDeliveryRepositoryRejectsStorageQuotaBeforeContentMetadata(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	inboxID := createInbox(t, pool, "storage-quota@example.com")
+	repository, err := NewDeliveryRepositoryWithLimits(pool, DeliveryLimits{MaxInboxMessages: 10, MaxInboxStorageBytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, contentKey("u"), 8)); err != nil {
+		t.Fatal(err)
+	}
+	rejectedKey := contentKey("v")
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(inboxID, rejectedKey, 3)); !errors.Is(err, message.ErrInboxStorageQuotaExceeded) {
+		t.Fatalf("CommitDelivery(storage quota) error = %v", err)
+	}
+	var rejectedMetadata int
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM mail_contents WHERE content_key = $1", rejectedKey).Scan(&rejectedMetadata); err != nil {
+		t.Fatal(err)
+	}
+	if rejectedMetadata != 0 {
+		t.Fatalf("rejected content metadata count = %d", rejectedMetadata)
+	}
+	assertCounts(t, pool, 1, 1)
+}
+
+func TestDeliveryRepositoryRejectsMultiRecipientDeliveryAtomicallyWhenOneInboxIsFull(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	availableInbox := createInbox(t, pool, "available@example.com")
+	fullInbox := createInbox(t, pool, "full@example.com")
+	repository, err := NewDeliveryRepositoryWithLimits(pool, DeliveryLimits{MaxInboxMessages: 1, MaxInboxStorageBytes: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CommitDelivery(context.Background(), validDelivery(fullInbox, contentKey("w"), 10)); err != nil {
+		t.Fatalf("fill Inbox: %v", err)
+	}
+	rejected := validDelivery(availableInbox, contentKey("x"), 10)
+	rejected.Recipients = []message.InboxID{availableInbox, fullInbox}
+	if _, err := repository.CommitDelivery(context.Background(), rejected); !errors.Is(err, message.ErrInboxMessageQuotaExceeded) {
+		t.Fatalf("CommitDelivery(multi-recipient quota) error = %v", err)
+	}
+
+	var availableMessages, fullMessages, rejectedMetadata int
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM messages WHERE inbox_id = $1::uuid", string(availableInbox)).Scan(&availableMessages); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM messages WHERE inbox_id = $1::uuid", string(fullInbox)).Scan(&fullMessages); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM mail_contents WHERE content_key = $1", rejected.Content.Key).Scan(&rejectedMetadata); err != nil {
+		t.Fatal(err)
+	}
+	if availableMessages != 0 || fullMessages != 1 || rejectedMetadata != 0 {
+		t.Fatalf("atomic rejection counts available=%d full=%d rejected metadata=%d", availableMessages, fullMessages, rejectedMetadata)
+	}
+}
+
 func TestDeliveryRepositoryReusesContentMetadata(t *testing.T) {
 	pool := newIntegrationPool(t)
 	resetIntegrationDatabase(t, pool)

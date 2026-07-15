@@ -49,9 +49,11 @@ type HTTP struct {
 
 // Inbox contains public anonymous Inbox lifecycle settings.
 type Inbox struct {
-	PublicDomains []string
-	DefaultTTL    time.Duration
-	MaxTTL        time.Duration
+	PublicDomains   []string
+	DefaultTTL      time.Duration
+	MaxTTL          time.Duration
+	MaxMessages     int
+	MaxStorageBytes int64
 }
 
 // Compatibility enables isolated third-party HTTP adapters.
@@ -188,9 +190,11 @@ func Load() (Config, error) {
 			MaxBytes: integer64("CONTENT_MAX_BYTES", 25<<20),
 		},
 		Inbox: Inbox{
-			PublicDomains: commaSeparated("PUBLIC_DOMAINS", "mailwisp.local"),
-			DefaultTTL:    duration("INBOX_DEFAULT_TTL", 24*time.Hour),
-			MaxTTL:        duration("INBOX_MAX_TTL", 7*24*time.Hour),
+			PublicDomains:   commaSeparated("PUBLIC_DOMAINS", "mailwisp.local"),
+			DefaultTTL:      duration("INBOX_DEFAULT_TTL", 24*time.Hour),
+			MaxTTL:          duration("INBOX_MAX_TTL", 7*24*time.Hour),
+			MaxMessages:     integer("INBOX_MAX_MESSAGES", 500),
+			MaxStorageBytes: integer64("INBOX_MAX_STORAGE_BYTES", 256<<20),
 		},
 		Compatibility: Compatibility{
 			DuckMailEnabled:              duckMailEnabled,
@@ -334,6 +338,12 @@ func (c Config) Validate() error {
 	}
 	if c.Inbox.DefaultTTL <= 0 || c.Inbox.MaxTTL <= 0 || c.Inbox.DefaultTTL > c.Inbox.MaxTTL {
 		errs = append(errs, errors.New("MAILWISP_INBOX_DEFAULT_TTL and MAILWISP_INBOX_MAX_TTL must define a positive ordered range"))
+	}
+	if c.Inbox.MaxMessages <= 0 || c.Inbox.MaxMessages > 1_000_000 {
+		errs = append(errs, errors.New("MAILWISP_INBOX_MAX_MESSAGES must be between 1 and 1000000"))
+	}
+	if c.Inbox.MaxStorageBytes < c.LMTP.MaxMessageBytes || c.Inbox.MaxStorageBytes > 1<<50 {
+		errs = append(errs, errors.New("MAILWISP_INBOX_MAX_STORAGE_BYTES must be at least MAILWISP_LMTP_MAX_MESSAGE_BYTES and at most 1125899906842624"))
 	}
 	if c.Compatibility.CloudflareLegacyPathsEnabled && !c.Compatibility.CloudflareTempEnabled {
 		errs = append(errs, errors.New("MAILWISP_CLOUDFLARE_LEGACY_PATHS_ENABLED requires MAILWISP_CLOUDFLARE_TEMP_ENABLED"))

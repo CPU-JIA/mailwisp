@@ -41,7 +41,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Content.Root != "./data/content" || cfg.Content.MaxBytes != 25<<20 {
 		t.Fatalf("Content defaults = %+v", cfg.Content)
 	}
-	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled || cfg.Compatibility.CloudflareTempEnabled || cfg.Compatibility.CloudflareLegacyPathsEnabled {
+	if len(cfg.Inbox.PublicDomains) != 1 || cfg.Inbox.DefaultTTL != 24*time.Hour || cfg.Inbox.MaxMessages != 500 || cfg.Inbox.MaxStorageBytes != 256<<20 || cfg.Compatibility.DuckMailEnabled || cfg.Compatibility.YYDSEnabled || cfg.Compatibility.CloudflareTempEnabled || cfg.Compatibility.CloudflareLegacyPathsEnabled {
 		t.Fatalf("Inbox/compatibility defaults = %+v/%+v", cfg.Inbox, cfg.Compatibility)
 	}
 	if len(cfg.BrowserSession.Key) != 0 || cfg.BrowserSession.Lifetime != 12*time.Hour {
@@ -150,6 +150,25 @@ func TestValidateRejectsCrossComponentLimitMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidInboxDeliveryQuotas(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "INBOX_MAX_MESSAGES", value: "0"},
+		{name: "INBOX_MAX_STORAGE_BYTES", value: "1024"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clearConfigurationEnvironment(t)
+			t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+			t.Setenv(prefix+test.name, test.value)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() error = nil, want Inbox delivery quota validation error")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidPostgresPool(t *testing.T) {
 	clearConfigurationEnvironment(t)
 	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
@@ -188,6 +207,8 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"PUBLIC_DOMAINS",
 		"INBOX_DEFAULT_TTL",
 		"INBOX_MAX_TTL",
+		"INBOX_MAX_MESSAGES",
+		"INBOX_MAX_STORAGE_BYTES",
 		"DUCKMAIL_ENABLED",
 		"YYDS_ENABLED",
 		"CLOUDFLARE_TEMP_ENABLED",

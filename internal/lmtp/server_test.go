@@ -124,6 +124,66 @@ func TestSessionRejectsUnknownAndTemporaryRecipients(t *testing.T) {
 	})
 }
 
+func TestSessionRejectsQuotaAtRCPTBeforeData(t *testing.T) {
+	t.Parallel()
+
+	resolver := &resolverStub{errors: map[string]error{"full@example.com": message.ErrInboxMessageQuotaExceeded}}
+	server := newTestServer(t, resolver, &receiverStub{})
+	metrics := &lmtpMetricsStub{}
+	server.SetMetrics(metrics)
+	runSession(t, server, func(client *lmtpClient) {
+		client.expectCode(220)
+		client.send("LHLO client")
+		client.readResponse(250)
+		client.send("MAIL FROM:<sender@example.com> SIZE=64")
+		client.expectCode(250)
+		client.send("RCPT TO:<full@example.com>")
+		client.expectCode(552)
+		client.send("DATA")
+		client.expectCode(503)
+		client.send("QUIT")
+		client.expectCode(221)
+	})
+	if len(resolver.declaredSizes) != 1 || resolver.declaredSizes[0] != 64 {
+		t.Fatalf("resolver declared sizes = %v", resolver.declaredSizes)
+	}
+	if metrics.quotaMessages.Load() != 1 {
+		t.Fatalf("message quota metric = %d", metrics.quotaMessages.Load())
+	}
+}
+
+func TestSessionMapsStorageQuotaAtCommit(t *testing.T) {
+	t.Parallel()
+
+	server := newTestServer(t,
+		&resolverStub{results: map[string]message.InboxID{"first@example.com": firstInboxID}},
+		&receiverStub{receive: func(_ context.Context, request message.ReceiveRequest) (message.Receipt, error) {
+			_, _ = io.ReadAll(request.Raw)
+			return message.Receipt{}, message.ErrInboxStorageQuotaExceeded
+		}},
+	)
+	metrics := &lmtpMetricsStub{}
+	server.SetMetrics(metrics)
+	runSession(t, server, func(client *lmtpClient) {
+		client.expectCode(220)
+		client.send("LHLO client")
+		client.readResponse(250)
+		client.send("MAIL FROM:<sender@example.com>")
+		client.expectCode(250)
+		client.send("RCPT TO:<first@example.com>")
+		client.expectCode(250)
+		client.send("DATA")
+		client.expectCode(354)
+		client.writeRaw("Subject: full\r\n\r\nbody\r\n.\r\n")
+		client.expectCode(552)
+		client.send("QUIT")
+		client.expectCode(221)
+	})
+	if metrics.quotaStorage.Load() != 1 || metrics.deliveryStatus.Load() != 552 {
+		t.Fatalf("storage quota metrics = %d, delivery = %d", metrics.quotaStorage.Load(), metrics.deliveryStatus.Load())
+	}
+}
+
 func TestSessionMapsTemporaryDeliveryFailurePerRecipient(t *testing.T) {
 	t.Parallel()
 
@@ -382,12 +442,21 @@ func TestServerRejectsSessionsAboveBound(t *testing.T) {
 type lmtpMetricsStub struct {
 	opened, closed, rejected atomic.Int64
 	deliveryStatus           atomic.Int64
+	quotaMessages            atomic.Int64
+	quotaStorage             atomic.Int64
 }
 
 func (m *lmtpMetricsStub) LMTPSessionOpened()        { m.opened.Add(1) }
 func (m *lmtpMetricsStub) LMTPSessionClosed()        { m.closed.Add(1) }
 func (m *lmtpMetricsStub) LMTPSessionRejected()      { m.rejected.Add(1) }
 func (m *lmtpMetricsStub) ObserveLMTPDelivery(v int) { m.deliveryStatus.Store(int64(v)) }
+func (m *lmtpMetricsStub) ObserveLMTPQuotaRejected(reason string) {
+	if reason == "messages" {
+		m.quotaMessages.Add(1)
+	} else if reason == "storage_bytes" {
+		m.quotaStorage.Add(1)
+	}
+}
 
 func TestParseEnvelopePaths(t *testing.T) {
 	t.Parallel()
@@ -582,16 +651,18 @@ func (c *lmtpClient) readResponse(want int) string {
 }
 
 type resolverStub struct {
-	mu      sync.Mutex
-	results map[string]message.InboxID
-	errors  map[string]error
-	calls   int
+	mu            sync.Mutex
+	results       map[string]message.InboxID
+	errors        map[string]error
+	calls         int
+	declaredSizes []int64
 }
 
-func (s *resolverStub) ResolveInbox(_ context.Context, address string) (message.InboxID, error) {
+func (s *resolverStub) ResolveInboxForDelivery(_ context.Context, address string, declaredSize int64) (message.InboxID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	s.declaredSizes = append(s.declaredSizes, declaredSize)
 	if err := s.errors[address]; err != nil {
 		return "", err
 	}

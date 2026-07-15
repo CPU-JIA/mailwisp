@@ -67,7 +67,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		return nil, fmt.Errorf("open content store: %w", err)
 	}
 	metrics := telemetry.NewMetrics(pool)
-	repository, err := postgres.NewDeliveryRepository(pool)
+	repository, err := postgres.NewDeliveryRepositoryWithLimits(pool, postgres.DeliveryLimits{
+		MaxInboxMessages: cfg.Inbox.MaxMessages, MaxInboxStorageBytes: cfg.Inbox.MaxStorageBytes,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create delivery repository: %w", err)
 	}
