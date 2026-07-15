@@ -3,9 +3,9 @@ import { computed } from 'vue'
 
 import { buildSafeMessageDocument } from '../messageHTML'
 
-const props = defineProps<{ html: string; title: string }>()
+const props = defineProps<{ html: string; title: string; cidSources?: Record<string, string> }>()
 
-const source = computed(() => buildSafeMessageDocument(props.html))
+const source = computed(() => buildSafeMessageDocument(props.html, props.cidSources))
 </script>
 
 <template>
