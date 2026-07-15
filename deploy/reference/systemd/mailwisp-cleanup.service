@@ -19,4 +19,3 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 ReadWritePaths=/var/lib/mailwisp
 UMask=0077
-

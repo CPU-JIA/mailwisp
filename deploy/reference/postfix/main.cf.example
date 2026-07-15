@@ -30,4 +30,3 @@ smtpd_tls_received_header = yes
 smtp_tls_security_level = may
 
 maillog_file = /var/log/postfix/mail.log
-
