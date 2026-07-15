@@ -26,6 +26,37 @@ function Invoke-Native {
     }
 }
 
+function Invoke-NativeWithRetry {
+    param(
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] [scriptblock]$Command,
+        [int]$MaximumAttempts = 5
+    )
+
+    if ($MaximumAttempts -lt 1 -or $MaximumAttempts -gt 10) {
+        throw 'MaximumAttempts must be between 1 and 10.'
+    }
+    for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
+        $nativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            & $Command
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $PSNativeCommandUseErrorActionPreference = $nativeErrorPreference
+        }
+        if ($exitCode -eq 0) {
+            return
+        }
+        if ($attempt -eq $MaximumAttempts) {
+            throw "$Name failed after $MaximumAttempts attempts with exit code $exitCode."
+        }
+        $delaySeconds = [Math]::Min(30, [Math]::Pow(2, $attempt))
+        Write-Warning "$Name attempt $attempt failed with exit code $exitCode; retrying in $delaySeconds seconds."
+        Start-Sleep -Seconds $delaySeconds
+    }
+}
+
 function Assert-LoopbackPortAvailable {
     param(
         [Parameter(Mandatory)] [string]$Name,
@@ -179,6 +210,9 @@ MAILWISP_CONTENT_MIN_FREE_BYTES=1073741824
         Invoke-Native -Name 'benchmark App image build' -Command {
             docker compose -p $projectName -f $baseCompose -f $benchmarkCompose build --pull app
         }
+    }
+    Invoke-NativeWithRetry -Name 'pinned PostgreSQL image pull' -Command {
+        docker compose -p $projectName -f $baseCompose -f $benchmarkCompose pull postgres
     }
     Invoke-Native -Name 'benchmark stack startup' -Command {
         docker compose -p $projectName -f $baseCompose -f $benchmarkCompose up -d postgres migrate app

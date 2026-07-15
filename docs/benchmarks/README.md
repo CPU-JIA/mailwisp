@@ -29,6 +29,8 @@ Canonical入口是`scripts/benchmark-compose.ps1`。脚本使用临时Compose Pr
 
 默认Loopback端口是HTTP `18080`与LMTP `25250`。脚本会在启动前验证端口可绑定，并在容器启动后核对Docker的实际发布映射；如端口冲突或被操作系统保留，可通过`-HTTPPort`与`-LMTPPort`显式替换。
 
+固定Digest的PostgreSQL镜像会在启动前执行最多5次有界指数退避拉取，以吸收Registry临时`429/5xx`与网络抖动；重试不改变Image Reference或Digest校验，持续失败仍终止Benchmark并保存诊断。
+
 默认输出到被Git忽略的`artifacts/compose-benchmark/`：
 
 - 每个场景/并发一份JSON；
