@@ -12,11 +12,13 @@ cp .env.example .env
 cp mailwisp.env.example mailwisp.env
 install -d -m 0700 secrets backups
 openssl rand -base64 32 > secrets/postgres_password.txt
+openssl rand -base64 32 > secrets/browser_session_key.txt
 chmod 0600 secrets/postgres_password.txt
+chmod 0600 secrets/browser_session_key.txt
 sudo chown -R 65532:65532 backups
 ```
 
-编辑`.env`中的Web域名、SMTP Host、收件域名和证书名称；编辑`mailwisp.env`中的公开域名与LMTP Host。Browser Session Key在对应安全功能合并后同样使用独立Secret文件注入，不写入Compose或Git。
+编辑`.env`中的Web域名、SMTP Host、收件域名和证书名称；编辑`mailwisp.env`中的公开域名与LMTP Host。Browser Session Key通过独立Docker Secret文件注入，不写入普通环境变量或Git。
 
 DNS至少包含Web/SMTP Host的A/AAAA记录和收件域名MX记录，云厂商必须允许公网25端口。
 

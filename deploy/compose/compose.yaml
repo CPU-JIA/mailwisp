@@ -10,6 +10,7 @@ x-app-environment: &app-environment
   MAILWISP_LMTP_ADDR: ":2525"
   MAILWISP_POSTGRES_DSN: postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable
   MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  MAILWISP_BROWSER_SESSION_KEY_FILE: /run/secrets/browser_session_key
   MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content
 
 services:
@@ -49,6 +50,7 @@ services:
     environment: *app-environment
     secrets:
       - postgres_password
+      - browser_session_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +76,7 @@ services:
       <<: *app-environment
     secrets:
       - postgres_password
+      - browser_session_key
     volumes:
       - content_data:/var/lib/mailwisp/content
       - ./backups:/backups
@@ -187,6 +190,8 @@ services:
 secrets:
   postgres_password:
     file: ${MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE:-./secrets/postgres_password.txt}
+  browser_session_key:
+    file: ${MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE:-./secrets/browser_session_key.txt}
 
 volumes:
   postgres_data:

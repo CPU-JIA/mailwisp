@@ -123,7 +123,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	browserSessionKey, err := decodeSecretKey("BROWSER_SESSION_KEY")
+	browserSessionKey, err := browserSessionKeyFromEnvironment()
 	if err != nil {
 		return Config{}, err
 	}
@@ -434,6 +434,43 @@ func decodeSecretKey(name string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("MAILWISP_%s must be base64 or base64url", name)
+}
+
+func browserSessionKeyFromEnvironment() ([]byte, error) {
+	keyFile := strings.TrimSpace(os.Getenv(prefix + "BROWSER_SESSION_KEY_FILE"))
+	keyValue := strings.TrimSpace(os.Getenv(prefix + "BROWSER_SESSION_KEY"))
+	if keyFile != "" && keyValue != "" {
+		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY and MAILWISP_BROWSER_SESSION_KEY_FILE must not both be configured")
+	}
+	if keyFile == "" {
+		return decodeSecretKey("BROWSER_SESSION_KEY")
+	}
+	file, err := os.Open(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("MAILWISP_BROWSER_SESSION_KEY_FILE: %w", err)
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil {
+		return nil, fmt.Errorf("read MAILWISP_BROWSER_SESSION_KEY_FILE: %w", err)
+	}
+	if len(raw) > 4096 {
+		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must not exceed 4096 bytes")
+	}
+	value := strings.TrimSpace(string(raw))
+	if value == "" {
+		return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must not be empty")
+	}
+	for _, encoding := range []*base64.Encoding{base64.RawURLEncoding.Strict(), base64.StdEncoding.Strict()} {
+		decoded, decodeErr := encoding.DecodeString(value)
+		if decodeErr == nil {
+			if len(decoded) != 32 {
+				return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must decode to exactly 32 bytes")
+			}
+			return decoded, nil
+		}
+	}
+	return nil, errors.New("MAILWISP_BROWSER_SESSION_KEY_FILE must contain base64 or base64url")
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {

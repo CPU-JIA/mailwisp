@@ -89,6 +89,20 @@ func TestLoadBrowserSessionKey(t *testing.T) {
 	}
 }
 
+func TestLoadBrowserSessionKeyFile(t *testing.T) {
+	clearConfigurationEnvironment(t)
+	path := filepath.Join(t.TempDir(), "browser-session-key")
+	if err := os.WriteFile(path, []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(prefix+"POSTGRES_DSN", "postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	t.Setenv(prefix+"BROWSER_SESSION_KEY_FILE", path)
+	cfg, err := Load()
+	if err != nil || len(cfg.BrowserSession.Key) != 32 {
+		t.Fatalf("Load() key length = %d, error = %v", len(cfg.BrowserSession.Key), err)
+	}
+}
+
 func TestLoadRequiresPostgresDSN(t *testing.T) {
 	clearConfigurationEnvironment(t)
 	if _, err := Load(); err == nil {
@@ -163,6 +177,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"INBOX_MAX_TTL",
 		"DUCKMAIL_ENABLED",
 		"BROWSER_SESSION_KEY",
+		"BROWSER_SESSION_KEY_FILE",
 		"BROWSER_SESSION_LIFETIME",
 		"CLEANUP_BATCH_SIZE",
 		"CLEANUP_INTERVAL",
