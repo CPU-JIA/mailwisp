@@ -34,4 +34,5 @@
 - Production Browser E2E验证安全Header、Capability不进入URL/Local Storage、Cookie属性、Reload、SMTP收件、Parser、Sandbox、附件字节与CSRF保护删除。
 - Compose Contract Test固定Overlay、编排脚本、Loopback端口、HTTP到HTTPS 308、版本锁定、失败证据与Volume清理要求。
 - GitHub Actions无论门禁成功或失败都上传机器可读`result.json`，失败时额外保留Compose日志与Playwright Trace/Video/Screenshot。
+- Benchmark与Verify Workflow共用同一个Linux安装脚本；脚本从`versions.lock`读取Compose版本与SHA-256，临时下载、校验后再安装，Runner预装版本不得绕过锁定。
 - `scripts/verify.ps1`在本地和GitHub Linux Full Verification中运行该链路，不允许因Docker、证书或浏览器缺失而跳过。

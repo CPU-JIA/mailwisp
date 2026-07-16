@@ -39,19 +39,7 @@ jobs:
 
       - name: Install pinned Docker Compose
         shell: bash
-        run: |
-          compose_version="$(awk -F= '$1 == "MAILWISP_DOCKER_COMPOSE" { print $2 }' deploy/compose/versions.lock)"
-          compose_sha256="$(awk -F= '$1 == "MAILWISP_DOCKER_COMPOSE_LINUX_X86_64_SHA256" { print $2 }' deploy/compose/versions.lock)"
-          test -n "$compose_version"
-          test -n "$compose_sha256"
-          install -d -m 0755 "$HOME/.docker/cli-plugins"
-          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 5 --retry-all-errors \
-            "https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-x86_64" \
-            --output "$HOME/.docker/cli-plugins/docker-compose"
-          echo "${compose_sha256}  $HOME/.docker/cli-plugins/docker-compose" \
-            | sha256sum --check --strict
-          chmod 0755 "$HOME/.docker/cli-plugins/docker-compose"
-          test "$(docker compose version --short)" = "$compose_version"
+        run: ./scripts/install-compose-linux.sh
 
       - name: Run bounded Compose regression benchmark
         shell: pwsh
