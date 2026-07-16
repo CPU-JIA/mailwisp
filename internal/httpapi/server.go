@@ -48,7 +48,7 @@ type MailboxService interface {
 	Create(context.Context, mailbox.CreateRequest) (mailbox.CreatedInbox, error)
 	Get(context.Context, message.InboxID) (mailbox.Inbox, error)
 	Delete(context.Context, message.InboxID) error
-	ListMessages(context.Context, message.InboxID, int) ([]mailbox.MessageSummary, error)
+	ListMessages(context.Context, message.InboxID, mailbox.CursorPage) (mailbox.CursorMessagePage, error)
 	GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error)
 	OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error)
 	DeleteMessage(context.Context, message.InboxID, message.MessageID) error
@@ -397,12 +397,26 @@ func (s *Server) handleListMessages(w http.ResponseWriter, request *http.Request
 		}
 		limit = parsed
 	}
-	messages, err := s.mailbox.ListMessages(request.Context(), principal.InboxID, limit)
+	cursor, err := decodeMessageCursor(request.URL.Query().Get("cursor"))
+	if err != nil {
+		writeError(w, request, http.StatusBadRequest, "invalid_pagination", "cursor is invalid")
+		return
+	}
+	page, err := s.mailbox.ListMessages(request.Context(), principal.InboxID, mailbox.CursorPage{Limit: limit, Before: cursor})
 	if err != nil {
 		writeMappedError(w, request, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": messages})
+	nextCursor := ""
+	if page.Next != nil {
+		nextCursor, err = encodeMessageCursor(*page.Next)
+		if err != nil {
+			s.logger.ErrorContext(request.Context(), "encode message cursor", "request_id", requestIDFromContext(request.Context()), "error", err)
+			writeError(w, request, http.StatusInternalServerError, "internal_error", "message page is unavailable")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": page.Items, "pagination": map[string]string{"next_cursor": nextCursor}})
 }
 
 func (s *Server) handleGetMessage(w http.ResponseWriter, request *http.Request) {

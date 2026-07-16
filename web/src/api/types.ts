@@ -18,9 +18,9 @@ export interface CreatedInbox {
 }
 
 export interface BrowserSession {
-	inbox: Inbox
-	expires_at: string
-	csrf_token: string
+  inbox: Inbox
+  expires_at: string
+  csrf_token: string
 }
 
 export interface MailAddress {
@@ -52,6 +52,11 @@ export interface MessageSummary {
   parse_status: 'pending' | 'processing' | 'parsed' | 'failed'
   size_bytes: number
   has_attachments: boolean
+}
+
+export interface MessagePage {
+  items: MessageSummary[]
+  nextCursor: string
 }
 
 export interface MessageDetail extends MessageSummary {

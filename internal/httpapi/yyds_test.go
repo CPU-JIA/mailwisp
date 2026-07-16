@@ -109,8 +109,8 @@ func (*yydsHTTPMailboxStub) Get(context.Context, message.InboxID) (mailbox.Inbox
 	return mailbox.Inbox{ID: yydsInboxID, Address: "demo@mailwisp.test", Status: "active", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}, nil
 }
 func (*yydsHTTPMailboxStub) Delete(context.Context, message.InboxID) error { return nil }
-func (*yydsHTTPMailboxStub) ListMessages(context.Context, message.InboxID, int) ([]mailbox.MessageSummary, error) {
-	return []mailbox.MessageSummary{}, nil
+func (*yydsHTTPMailboxStub) ListMessages(context.Context, message.InboxID, mailbox.CursorPage) (mailbox.CursorMessagePage, error) {
+	return mailbox.CursorMessagePage{Items: []mailbox.MessageSummary{}}, nil
 }
 func (*yydsHTTPMailboxStub) ListMessagePage(context.Context, message.InboxID, int, int) (mailbox.MessagePage, error) {
 	return mailbox.MessagePage{Items: []mailbox.MessageSummary{{ID: yydsMessageID, EnvelopeSender: "sender@example.com", Subject: "Code", ReceivedAt: time.Date(2026, 7, 15, 1, 0, 0, 0, time.UTC), SizeBytes: 100}}, Total: 12, Unread: 7}, nil

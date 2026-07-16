@@ -171,7 +171,7 @@ function errorMessage(code: string): string {
           <div class="message-column reveal" style="--delay: 80ms">
             <div class="section-heading">
               <div><p class="section-number">01</p><h2>{{ t('inbox.messages') }}</h2></div>
-              <button class="icon-button" type="button" :aria-label="t('inbox.refresh')" :disabled="mailbox.refreshing.value" @click="mailbox.refreshMessages">
+              <button class="icon-button" type="button" :aria-label="t('inbox.refresh')" :disabled="mailbox.refreshing.value || mailbox.loadingMore.value" @click="mailbox.refreshMessages">
                 <span :class="{ spinning: mailbox.refreshing.value }" aria-hidden="true">↻</span>
               </button>
             </div>
@@ -183,6 +183,12 @@ function errorMessage(code: string): string {
                 <span class="message-time">{{ formatRelative(item.received_at) }}</span>
                 <span v-if="item.parse_status !== 'parsed'" class="status-chip">{{ item.parse_status === 'failed' ? t('inbox.failed') : t('inbox.pending') }}</span>
               </button>
+              <div v-if="mailbox.nextCursor.value || mailbox.loadMoreError.value" class="message-pagination">
+                <p v-if="mailbox.loadMoreError.value" role="status">{{ t('inbox.loadMoreError') }}</p>
+                <button class="button secondary-button" type="button" :disabled="mailbox.loadingMore.value || mailbox.refreshing.value" @click="mailbox.loadMoreMessages">
+                  {{ mailbox.loadingMore.value ? t('inbox.loadingMore') : t('inbox.loadMore') }}
+                </button>
+              </div>
             </div>
             <div v-else class="empty-state"><span aria-hidden="true">⌁</span><h3>{{ t('inbox.emptyTitle') }}</h3><p>{{ t('inbox.emptyBody') }}</p></div>
           </div>

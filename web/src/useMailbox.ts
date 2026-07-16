@@ -14,16 +14,20 @@ export interface ViewError {
 export function useMailbox(client = new MailWispClient()) {
   const phase = ref<Phase>('welcome')
   const token = ref('')
-	const sessionActive = ref(false)
+  const sessionActive = ref(false)
   const inbox = ref<Inbox | null>(null)
   const issuedCapability = ref<Capability | null>(null)
   const messages = ref<MessageSummary[]>([])
+  const nextCursor = ref('')
   const selected = ref<MessageDetail | null>(null)
   const inlineImages = ref<Record<string, string>>({})
   const error = ref<ViewError | null>(null)
   const refreshing = ref(false)
+  const loadingMore = ref(false)
+  const loadMoreError = ref<ViewError | null>(null)
   let activeRequest: AbortController | null = null
   let pollTimer: number | null = null
+  let historyExpanded = false
 
   async function createInbox(): Promise<void> {
     cancelActiveRequest()
@@ -49,22 +53,25 @@ export function useMailbox(client = new MailWispClient()) {
     error.value = null
     activeRequest = new AbortController()
     try {
-	  let credential = normalized
-	  let loadedInbox: Inbox
-	  try {
-		const session = await client.exchangeSession(normalized, activeRequest.signal)
-		loadedInbox = session.inbox
-		sessionActive.value = true
-		credential = ''
-	  } catch (cause) {
-		if (!(cause instanceof APIError) || cause.code !== 'not_configured') throw cause
-		loadedInbox = await client.getInbox(normalized, activeRequest.signal)
-		sessionActive.value = false
-	  }
-	  const loadedMessages = await client.listMessages(credential, 100, activeRequest.signal)
-	  token.value = credential
+      let credential = normalized
+      let loadedInbox: Inbox
+      try {
+        const session = await client.exchangeSession(normalized, activeRequest.signal)
+        loadedInbox = session.inbox
+        sessionActive.value = true
+        credential = ''
+      } catch (cause) {
+        if (!(cause instanceof APIError) || cause.code !== 'not_configured') throw cause
+        loadedInbox = await client.getInbox(normalized, activeRequest.signal)
+        sessionActive.value = false
+      }
+      const loadedPage = await client.listMessages(credential, 100, '', activeRequest.signal)
+      token.value = credential
       inbox.value = loadedInbox
-      messages.value = loadedMessages
+      messages.value = loadedPage.items
+      nextCursor.value = loadedPage.nextCursor
+      loadMoreError.value = null
+      historyExpanded = false
       issuedCapability.value = null
       phase.value = 'inbox'
       schedulePoll()
@@ -74,23 +81,61 @@ export function useMailbox(client = new MailWispClient()) {
   }
 
   async function refreshMessages(): Promise<void> {
-	if ((!token.value && !sessionActive.value) || refreshing.value) return
+    if (phase.value !== 'inbox' || (!token.value && !sessionActive.value) || refreshing.value) return
     refreshing.value = true
     cancelActiveRequest()
     const controller = new AbortController()
     activeRequest = controller
     try {
-      messages.value = await client.listMessages(token.value, 100, controller.signal)
+      const page = await client.listMessages(token.value, 100, '', controller.signal)
+      if (historyExpanded) {
+        const latest = new Set(page.items.map((item) => item.id))
+        messages.value = [...page.items, ...messages.value.filter((item) => !latest.has(item.id))]
+      } else {
+        messages.value = page.items
+        nextCursor.value = page.nextCursor
+      }
+      loadMoreError.value = null
     } catch (cause) {
       if (!(cause instanceof DOMException && cause.name === 'AbortError')) handleError(cause)
     } finally {
-      if (activeRequest === controller) activeRequest = null
+      const ownsRequest = activeRequest === controller
+      if (ownsRequest) activeRequest = null
       refreshing.value = false
-      schedulePoll()
+      if (ownsRequest) schedulePoll()
+    }
+  }
+
+  async function loadMoreMessages(): Promise<void> {
+    if (!nextCursor.value || loadingMore.value || refreshing.value || phase.value !== 'inbox') return
+    stopPoll()
+    cancelActiveRequest()
+    loadingMore.value = true
+    loadMoreError.value = null
+    const cursor = nextCursor.value
+    const controller = new AbortController()
+    activeRequest = controller
+    try {
+      const page = await client.listMessages(token.value, 100, cursor, controller.signal)
+      const known = new Set(messages.value.map((item) => item.id))
+      messages.value = [...messages.value, ...page.items.filter((item) => !known.has(item.id))]
+      nextCursor.value = page.nextCursor
+      historyExpanded = true
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
+        const apiError = cause instanceof APIError ? cause : new APIError(0)
+        loadMoreError.value = { code: apiError.code, requestID: apiError.requestID }
+      }
+    } finally {
+      const ownsRequest = activeRequest === controller
+      if (ownsRequest) activeRequest = null
+      loadingMore.value = false
+      if (ownsRequest) schedulePoll()
     }
   }
 
   async function openMessage(summary: MessageSummary): Promise<void> {
+    stopPoll()
     cancelActiveRequest()
     activeRequest = new AbortController()
     try {
@@ -178,15 +223,19 @@ export function useMailbox(client = new MailWispClient()) {
   function reset(): void {
     cancelActiveRequest()
     stopPoll()
-	if (sessionActive.value) void client.deleteSession().catch(() => undefined)
-	sessionActive.value = false
-	token.value = ''
+    if (sessionActive.value) void client.deleteSession().catch(() => undefined)
+    sessionActive.value = false
+    token.value = ''
     inbox.value = null
     issuedCapability.value = null
     messages.value = []
+    nextCursor.value = ''
     selected.value = null
     inlineImages.value = {}
     error.value = null
+    loadingMore.value = false
+    loadMoreError.value = null
+    historyExpanded = false
     phase.value = 'welcome'
   }
 
@@ -212,6 +261,7 @@ export function useMailbox(client = new MailWispClient()) {
     stopPoll()
     if (phase.value !== 'inbox') return
     pollTimer = window.setTimeout(() => {
+      if (phase.value !== 'inbox') return
       if (document.visibilityState === 'visible') void refreshMessages()
       else schedulePoll()
     }, 10_000)
@@ -222,26 +272,29 @@ export function useMailbox(client = new MailWispClient()) {
     stopPoll()
   })
 
-	void restoreSession()
+  void restoreSession()
 
-	async function restoreSession(): Promise<void> {
-	  try {
-		const session = await client.getSession()
-		const loadedMessages = await client.listMessages('', 100)
-		sessionActive.value = true
-		inbox.value = session.inbox
-		messages.value = loadedMessages
-		phase.value = 'inbox'
-		schedulePoll()
-	  } catch (cause) {
-		if (cause instanceof APIError && (cause.code === 'unauthenticated' || cause.code === 'not_configured' || cause.code === 'network_error' || cause.code === 'unexpected_response')) return
-		handleError(cause)
-	  }
-	}
+  async function restoreSession(): Promise<void> {
+    try {
+      const session = await client.getSession()
+      const loadedPage = await client.listMessages('', 100)
+      sessionActive.value = true
+      inbox.value = session.inbox
+      messages.value = loadedPage.items
+      nextCursor.value = loadedPage.nextCursor
+      loadMoreError.value = null
+      historyExpanded = false
+      phase.value = 'inbox'
+      schedulePoll()
+    } catch (cause) {
+      if (cause instanceof APIError && (cause.code === 'unauthenticated' || cause.code === 'not_configured' || cause.code === 'network_error' || cause.code === 'unexpected_response')) return
+      handleError(cause)
+    }
+  }
 
   return {
-	phase, token, sessionActive, inbox, issuedCapability, messages, selected, inlineImages, error, refreshing,
-    createInbox, openInbox, refreshMessages, openMessage, closeMessage, deleteMessage, downloadAttachment, deleteInbox, reset,
+    phase, token, sessionActive, inbox, issuedCapability, messages, nextCursor, selected, inlineImages, error, refreshing, loadingMore, loadMoreError,
+    createInbox, openInbox, refreshMessages, loadMoreMessages, openMessage, closeMessage, deleteMessage, downloadAttachment, deleteInbox, reset,
   }
 }
 

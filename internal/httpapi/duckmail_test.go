@@ -122,8 +122,8 @@ func (*duckHTTPMailboxStub) Get(_ context.Context, inboxID message.InboxID) (mai
 	return mailbox.Inbox{ID: inboxID, Address: "demo@mailwisp.test", Status: "active", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 func (*duckHTTPMailboxStub) Delete(context.Context, message.InboxID) error { return nil }
-func (*duckHTTPMailboxStub) ListMessages(context.Context, message.InboxID, int) ([]mailbox.MessageSummary, error) {
-	return []mailbox.MessageSummary{}, nil
+func (*duckHTTPMailboxStub) ListMessages(context.Context, message.InboxID, mailbox.CursorPage) (mailbox.CursorMessagePage, error) {
+	return mailbox.CursorMessagePage{Items: []mailbox.MessageSummary{}}, nil
 }
 func (*duckHTTPMailboxStub) ListMessagePage(context.Context, message.InboxID, int, int) (mailbox.MessagePage, error) {
 	return mailbox.MessagePage{Items: []mailbox.MessageSummary{}, Total: 0}, nil

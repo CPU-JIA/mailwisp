@@ -54,6 +54,24 @@ type MessageSummary struct {
 	Seen           bool              `json:"seen"`
 }
 
+// MessageCursor is one stable newest-first keyset boundary.
+type MessageCursor struct {
+	ReceivedAt time.Time
+	ID         message.MessageID
+}
+
+// CursorPage requests one bounded canonical keyset page.
+type CursorPage struct {
+	Limit  int
+	Before *MessageCursor
+}
+
+// CursorMessagePage contains canonical items and an optional next boundary.
+type CursorMessagePage struct {
+	Items []MessageSummary
+	Next  *MessageCursor
+}
+
 // MessageDetail contains parsed, untrusted email content.
 type MessageDetail struct {
 	MessageSummary
@@ -72,6 +90,7 @@ type MessageDetail struct {
 type Page struct {
 	Limit  int
 	Offset int
+	Before *MessageCursor
 }
 
 // MessagePage contains one bounded page and complete Inbox counters.
