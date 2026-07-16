@@ -86,12 +86,26 @@ jobs:
         shell: pwsh
         run: ./scripts/verify.ps1
 
+      - name: Upload production E2E evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/production-e2e/result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload browser failure evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            artifacts/production-e2e
+            web/playwright-report
+            web/test-results
+            web/playwright-production-report
+            web/test-results-production
             spikes/frontend/playwright-report
             spikes/frontend/test-results
           if-no-files-found: ignore

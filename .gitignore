@@ -28,6 +28,8 @@ web/node_modules/
 web/dist/
 web/test-results/
 web/playwright-report/
+web/test-results-production/
+web/playwright-production-report/
 **/node_modules/
 spikes/frontend/dist/
 spikes/frontend/test-results/

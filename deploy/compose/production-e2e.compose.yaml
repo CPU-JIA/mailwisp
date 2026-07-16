@@ -1,0 +1,39 @@
+services:
+  app:
+    environment:
+      MAILWISP_CREATE_RATE_PER_MINUTE: "10000"
+      MAILWISP_CREATE_RATE_BURST: "10000"
+      MAILWISP_CREATE_DAILY_LIMIT: "1000000"
+      MAILWISP_PARSER_POLL_INTERVAL: "100ms"
+      MAILWISP_CONTENT_MIN_FREE_BYTES: "26214400"
+
+  edge:
+    ports: !override
+      - name: e2e-http
+        target: 80
+        published: "${MAILWISP_E2E_HTTP_PORT:?set MAILWISP_E2E_HTTP_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - name: e2e-https
+        target: 443
+        published: "${MAILWISP_E2E_HTTPS_PORT:?set MAILWISP_E2E_HTTPS_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${MAILWISP_E2E_CERT_ROOT:?set MAILWISP_E2E_CERT_ROOT}
+        target: /etc/letsencrypt
+        read_only: true
+
+  postfix:
+    ports: !override
+      - name: e2e-smtp
+        target: 25
+        published: "${MAILWISP_E2E_SMTP_PORT:?set MAILWISP_E2E_SMTP_PORT}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${MAILWISP_E2E_CERT_ROOT:?set MAILWISP_E2E_CERT_ROOT}
+        target: /etc/letsencrypt
+        read_only: true

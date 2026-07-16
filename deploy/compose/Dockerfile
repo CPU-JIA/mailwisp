@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.20.0
+# syntax=docker/dockerfile:1.20.0@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d
 
 FROM golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS go-build
 WORKDIR /src
@@ -29,4 +29,5 @@ CMD ["serve"]
 
 FROM nginx:1.30.3-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1 AS edge
 COPY --from=web-build /src/web/dist/ /usr/share/nginx/html/
+COPY deploy/compose/nginx/security-headers.conf /etc/nginx/snippets/mailwisp-security-headers.conf
 COPY deploy/compose/nginx/default.conf.template /etc/nginx/templates/default.conf.template

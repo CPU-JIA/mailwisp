@@ -12,7 +12,10 @@ postconf -e 'mydestination ='
 postconf -e 'inet_interfaces = all'
 postconf -e 'inet_protocols = all'
 postconf -e "relay_domains = ${MAILWISP_MAIL_DOMAIN}"
-postconf -e 'transport_maps = hash:/etc/postfix/mailwisp_transport'
+postconf -e 'relay_transport = lmtp:inet:app:2525'
+postconf -e 'transport_maps ='
+postconf -e 'alias_maps ='
+postconf -e 'alias_database ='
 postconf -e 'smtpd_banner = $myhostname ESMTP'
 postconf -e 'disable_vrfy_command = yes'
 postconf -e 'smtpd_helo_required = yes'
@@ -33,7 +36,5 @@ postconf -e 'smtpd_tls_received_header = yes'
 postconf -e 'smtp_tls_security_level = may'
 postconf -e 'maillog_file = /dev/stdout'
 
-printf '%s\n' "${MAILWISP_MAIL_DOMAIN} lmtp:inet:app:2525" >/etc/postfix/mailwisp_transport
-postmap /etc/postfix/mailwisp_transport
 postfix check
 exec postfix start-fg

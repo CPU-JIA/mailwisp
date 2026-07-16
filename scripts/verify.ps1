@@ -10,9 +10,16 @@ function Invoke-Native {
         [scriptblock]$Command
     )
 
-    & $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Name failed with exit code $LASTEXITCODE."
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        & $Command
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    }
+    if ($exitCode -ne 0) {
+        throw "$Name failed with exit code $exitCode."
     }
 }
 
@@ -30,15 +37,15 @@ function Assert-GoToolVersion {
 
     $command = Get-Command $CommandName -ErrorAction SilentlyContinue
     if (-not $command) {
-        throw "$CommandName未安装，验证不得跳过。"
+        throw "${CommandName}未安装，验证不得跳过。"
     }
     $metadata = & go version -m $command.Source | Out-String
     if ($LASTEXITCODE -ne 0) {
-        throw "无法读取$CommandName构建元数据。"
+        throw "无法读取${CommandName}构建元数据。"
     }
     $expected = "mod`t$ModulePath`t$Version"
     if (-not $metadata.Contains($expected)) {
-        throw "$CommandName版本不符合要求，必须为$ModulePath@$Version。"
+        throw "${CommandName}版本不符合要求，必须为$ModulePath@$Version。"
     }
 }
 
@@ -52,14 +59,14 @@ function Assert-PostgreSQLToolVersion {
     )
 
     if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
-        throw "$CommandName未安装，PostgreSQL备份恢复验证不得跳过。"
+        throw "${CommandName}未安装，PostgreSQL备份恢复验证不得跳过。"
     }
     $reported = & $CommandName --version | Out-String
     if ($LASTEXITCODE -ne 0) {
-        throw "无法读取$CommandName版本。"
+        throw "无法读取${CommandName}版本。"
     }
     if ($reported -notmatch "^$([regex]::Escape($CommandName)) \(PostgreSQL\) $([regex]::Escape($Version))(?:\s|$)") {
-        throw "$CommandName版本不符合要求，必须为PostgreSQL $Version。实际：$($reported.Trim())"
+        throw "${CommandName}版本不符合要求，必须为PostgreSQL $Version。实际：$($reported.Trim())"
     }
 }
 
@@ -259,6 +266,7 @@ try {
             Invoke-Native -Name 'production frontend unit tests' -Command { npm test }
             Invoke-Native -Name 'production frontend build' -Command { npm run build }
             Invoke-Native -Name 'production frontend browser tests' -Command { npm run test:e2e }
+            Invoke-Native -Name 'production Compose browser E2E' -Command { & (Join-Path $repositoryRoot 'scripts/e2e-compose.ps1') -SkipBuild }
             Invoke-Native -Name 'production frontend npm audit' -Command { npm audit --audit-level=low }
         } finally {
             Pop-Location

@@ -275,9 +275,12 @@ export function useMailbox(client = new MailWispClient()) {
   void restoreSession()
 
   async function restoreSession(): Promise<void> {
+    const controller = new AbortController()
+    activeRequest = controller
     try {
-      const session = await client.getSession()
-      const loadedPage = await client.listMessages('', 100)
+      const session = await client.getSession(controller.signal)
+      const loadedPage = await client.listMessages('', 100, '', controller.signal)
+      if (activeRequest !== controller) return
       sessionActive.value = true
       inbox.value = session.inbox
       messages.value = loadedPage.items
@@ -289,6 +292,8 @@ export function useMailbox(client = new MailWispClient()) {
     } catch (cause) {
       if (cause instanceof APIError && (cause.code === 'unauthenticated' || cause.code === 'not_configured' || cause.code === 'network_error' || cause.code === 'unexpected_response')) return
       handleError(cause)
+    } finally {
+      if (activeRequest === controller) activeRequest = null
     }
   }
 
