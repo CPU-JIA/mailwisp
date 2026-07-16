@@ -233,6 +233,31 @@ function Save-E2EDiagnostics {
     }
 }
 
+function Assert-NoReparsePoint {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Child
+    )
+
+    if ([System.IO.Directory]::Exists($Root) -or [System.IO.File]::Exists($Root)) {
+        $rootAttributes = [System.IO.File]::GetAttributes($Root)
+        if (($rootAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Production E2E artifact root is a symbolic link or junction: $Root"
+        }
+    }
+
+    $current = $Root
+    $relative = [System.IO.Path]::GetRelativePath($Root, $Child)
+    foreach ($segment in $relative.Split([System.IO.Path]::DirectorySeparatorChar, [StringSplitOptions]::RemoveEmptyEntries)) {
+        $current = Join-Path $current $segment
+        if (-not ([System.IO.Directory]::Exists($current) -or [System.IO.File]::Exists($current))) { continue }
+        $attributes = [System.IO.File]::GetAttributes($current)
+        if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Production E2E output path contains a symbolic link or junction: $current"
+        }
+    }
+}
+
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $artifactRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot 'artifacts'))
 $outputRoot = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
@@ -240,10 +265,12 @@ $outputRoot = if ([System.IO.Path]::IsPathRooted($OutputDirectory)) {
 } else {
     [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $OutputDirectory))
 }
+$pathComparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
 $artifactPrefix = $artifactRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-if ($outputRoot -ne $artifactRoot -and -not $outputRoot.StartsWith($artifactPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Production E2E output must stay within the repository artifacts directory.'
+if (-not $outputRoot.StartsWith($artifactPrefix, $pathComparison)) {
+    throw 'Production E2E output must be a subdirectory of the repository artifacts directory.'
 }
+Assert-NoReparsePoint -Root $artifactRoot -Child $outputRoot
 if ([System.IO.Directory]::Exists($outputRoot)) { [System.IO.Directory]::Delete($outputRoot, $true) }
 [System.IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 
@@ -258,7 +285,7 @@ $SMTPPort = Get-LoopbackPort -Requested $SMTPPort -Used $usedPorts
 $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $fixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $temporaryRoot ("mailwisp-production-e2e-" + [guid]::NewGuid().ToString('N'))))
 $temporaryPrefix = $temporaryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
-if (-not $fixtureRoot.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+if (-not $fixtureRoot.StartsWith($temporaryPrefix, $pathComparison)) {
     throw 'Production E2E fixture path escaped the temporary directory.'
 }
 $projectName = "mailwisp-e2e-" + [guid]::NewGuid().ToString('N').Substring(0, 12)
@@ -349,6 +376,47 @@ try {
         Pop-Location
     }
 
+} catch {
+    $failure = $_
+    Save-E2EDiagnostics -ComposeArguments $composeArguments -Destination $outputRoot
+} finally {
+    $cleanupFailures = [System.Collections.Generic.List[string]]::new()
+    try {
+        Invoke-Native -Name 'production E2E Compose teardown' -Command {
+            docker compose @composeArguments down --volumes --remove-orphans --timeout 10 2>$null | Out-Null
+        }
+    } catch {
+        $cleanupFailures.Add("Compose teardown: $($_.Exception.Message)")
+    }
+    foreach ($name in $managedEnvironment) {
+        try {
+            [Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name])
+        } catch {
+            $cleanupFailures.Add("Environment restore for ${name}: $($_.Exception.Message)")
+        }
+    }
+    try {
+        if ([System.IO.Directory]::Exists($fixtureRoot)) { [System.IO.Directory]::Delete($fixtureRoot, $true) }
+    } catch {
+        $cleanupFailures.Add("Fixture removal: $($_.Exception.Message)")
+    }
+    if ($cleanupFailures.Count -gt 0) {
+        $cleanupMessage = $cleanupFailures -join ' '
+        if ($null -eq $failure) {
+            $stage = 'cleanup'
+            $failure = [System.Exception]::new("Production E2E cleanup failed. $cleanupMessage")
+        } else {
+            $executionStage = $stage
+            $stage = "$executionStage; cleanup"
+            $failure = [System.Exception]::new(
+                "Production E2E failed during $executionStage and cleanup also failed. $cleanupMessage",
+                $failure.Exception
+            )
+        }
+    }
+}
+
+if ($null -eq $failure) {
     [ordered]@{
         schema_version = 1
         observed_at = [DateTimeOffset]::UtcNow.ToString('o')
@@ -357,25 +425,15 @@ try {
         docker_compose_version = $composeVersion
         endpoints = [ordered]@{ http = "127.0.0.1:$HTTPPort"; https = "127.0.0.1:$HTTPSPort"; smtp = "127.0.0.1:$SMTPPort" }
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $outputRoot 'result.json') -Encoding utf8NoBOM
-} catch {
-    $failure = $_
-    Save-E2EDiagnostics -ComposeArguments $composeArguments -Destination $outputRoot
-    [ordered]@{
-        schema_version = 1
-        observed_at = [DateTimeOffset]::UtcNow.ToString('o')
-        status = 'failed'
-        project = $projectName
-        stage = $stage
-        error = $_.Exception.Message
-    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $outputRoot 'result.json') -Encoding utf8NoBOM
-} finally {
-    try {
-        & docker compose @composeArguments down --volumes --remove-orphans --timeout 10 2>$null | Out-Null
-    } catch {
-        # The original failure remains authoritative; environment and secret cleanup must still run.
-    }
-    foreach ($name in $managedEnvironment) { [Environment]::SetEnvironmentVariable($name, $originalEnvironment[$name]) }
-    if ([System.IO.Directory]::Exists($fixtureRoot)) { [System.IO.Directory]::Delete($fixtureRoot, $true) }
+    return
 }
 
-if ($null -ne $failure) { throw $failure }
+[ordered]@{
+    schema_version = 1
+    observed_at = [DateTimeOffset]::UtcNow.ToString('o')
+    status = 'failed'
+    project = $projectName
+    stage = $stage
+    error = if ($failure -is [System.Exception]) { $failure.Message } else { $failure.Exception.Message }
+} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $outputRoot 'result.json') -Encoding utf8NoBOM
+throw $failure

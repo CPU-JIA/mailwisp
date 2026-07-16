@@ -35,4 +35,5 @@
 - Compose Contract Test固定Overlay、编排脚本、Loopback端口、HTTP到HTTPS 308、版本锁定、失败证据与Volume清理要求。
 - GitHub Actions无论门禁成功或失败都上传机器可读`result.json`，失败时额外保留Compose日志与Playwright Trace/Video/Screenshot。
 - Benchmark与Verify Workflow共用同一个Linux安装脚本；脚本从`versions.lock`读取Compose版本与SHA-256，临时下载、校验后再安装，Runner预装版本不得绕过锁定。
+- `passed`结果只在Compose、环境变量和临时Secret全部清理后写入；任一清理步骤失败都必须让门禁失败，禁止绿色构建遗留测试资源。输出必须位于`artifacts/`真实子目录，删除前拒绝Symlink或Junction路径。
 - `scripts/verify.ps1`在本地和GitHub Linux Full Verification中运行该链路，不允许因Docker、证书或浏览器缺失而跳过。
