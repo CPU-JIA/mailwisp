@@ -139,6 +139,9 @@ func (r *MailboxRepository) PurgeInbox(ctx context.Context, inboxID message.Inbo
 
 // ListMessages returns a bounded newest-first page for one active Inbox.
 func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.InboxID, page mailbox.Page) (mailbox.MessagePage, error) {
+	if page.Limit <= 0 || page.Offset < 0 || (page.Before != nil && (page.Offset != 0 || page.Before.ID == "" || page.Before.ReceivedAt.IsZero())) {
+		return mailbox.MessagePage{}, errors.New("message page is invalid")
+	}
 	var total, unread int
 	if err := r.pool.QueryRow(ctx, `
 		SELECT count(*), count(*) FILTER (WHERE message.seen_at IS NULL)
@@ -150,7 +153,7 @@ func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.In
 	`, string(inboxID)).Scan(&total, &unread); err != nil {
 		return mailbox.MessagePage{}, fmt.Errorf("count Inbox messages: %w", err)
 	}
-	rows, err := r.pool.Query(ctx, `
+	query := `
 		SELECT message.id::text,
 		       message.envelope_sender,
 		       COALESCE(parsed.subject, ''),
@@ -167,9 +170,17 @@ func (r *MailboxRepository) ListMessages(ctx context.Context, inboxID message.In
 		WHERE message.inbox_id = $1::uuid
 		  AND inbox.status = 'active'
 		  AND inbox.expires_at > now()
+	`
+	arguments := []any{string(inboxID), page.Limit, page.Offset}
+	if page.Before != nil {
+		query += ` AND (message.received_at, message.id) < ($4::timestamptz, $5::uuid)`
+		arguments = append(arguments, page.Before.ReceivedAt.UTC(), string(page.Before.ID))
+	}
+	query += `
 		ORDER BY message.received_at DESC, message.id DESC
 		LIMIT $2 OFFSET $3
-	`, string(inboxID), page.Limit, page.Offset)
+	`
+	rows, err := r.pool.Query(ctx, query, arguments...)
 	if err != nil {
 		return mailbox.MessagePage{}, fmt.Errorf("list Inbox messages: %w", err)
 	}

@@ -213,16 +213,29 @@ func (s *Service) Delete(ctx context.Context, inboxID message.InboxID) error {
 	return s.deleteContent(refs)
 }
 
-// ListMessages returns a bounded newest-first Inbox page.
-func (s *Service) ListMessages(ctx context.Context, inboxID message.InboxID, limit int) ([]MessageSummary, error) {
+// ListMessages returns one bounded newest-first canonical keyset page.
+func (s *Service) ListMessages(ctx context.Context, inboxID message.InboxID, request CursorPage) (CursorMessagePage, error) {
+	limit := request.Limit
 	if limit <= 0 {
 		limit = 50
 	}
 	if limit > 100 {
 		limit = 100
 	}
-	page, err := s.repository.ListMessages(ctx, inboxID, Page{Limit: limit})
-	return page.Items, err
+	if request.Before != nil && (request.Before.ID == "" || request.Before.ReceivedAt.IsZero()) {
+		return CursorMessagePage{}, errors.New("message cursor is invalid")
+	}
+	page, err := s.repository.ListMessages(ctx, inboxID, Page{Limit: limit + 1, Before: request.Before})
+	if err != nil {
+		return CursorMessagePage{}, err
+	}
+	result := CursorMessagePage{Items: page.Items}
+	if len(result.Items) > limit {
+		result.Items = result.Items[:limit]
+		last := result.Items[len(result.Items)-1]
+		result.Next = &MessageCursor{ReceivedAt: last.ReceivedAt.UTC(), ID: last.ID}
+	}
+	return result, nil
 }
 
 // ListMessagePage returns a compatibility-oriented offset page.

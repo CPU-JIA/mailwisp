@@ -1,4 +1,4 @@
-import type { BrowserSession, CreatedInbox, ErrorEnvelope, Inbox, MessageDetail, MessageSummary } from './types'
+import type { BrowserSession, CreatedInbox, ErrorEnvelope, Inbox, MessageDetail, MessagePage, MessageSummary } from './types'
 
 export class APIError extends Error {
   readonly code: string
@@ -15,11 +15,14 @@ export class APIError extends Error {
 }
 interface DataEnvelope<T> {
   data: T
+  pagination?: {
+    next_cursor?: string
+  }
 }
 
 export class MailWispClient {
   readonly #baseURL: string
-	#csrfToken = ''
+  #csrfToken = ''
 
   constructor(baseURL = '') {
     this.#baseURL = baseURL.replace(/\/$/, '')
@@ -40,27 +43,30 @@ export class MailWispClient {
       headers: { Authorization: `Bearer ${token}` },
       signal,
     })
-	this.#csrfToken = session.csrf_token
-	return session
+    this.#csrfToken = session.csrf_token
+    return session
   }
 
   async getSession(signal?: AbortSignal): Promise<BrowserSession> {
-	const session = await this.#request<BrowserSession>('/api/v1/session', { signal })
-	this.#csrfToken = session.csrf_token
-	return session
+    const session = await this.#request<BrowserSession>('/api/v1/session', { signal })
+    this.#csrfToken = session.csrf_token
+    return session
   }
 
   async deleteSession(signal?: AbortSignal): Promise<void> {
     await this.#request<void>('/api/v1/session', { method: 'DELETE', headers: this.#csrfHeaders(), signal })
-	this.#csrfToken = ''
+    this.#csrfToken = ''
   }
 
   getInbox(token = '', signal?: AbortSignal): Promise<Inbox> {
     return this.#request<Inbox>('/api/v1/inboxes/me', this.#authenticated(token, signal))
   }
 
-  listMessages(token = '', limit = 100, signal?: AbortSignal): Promise<MessageSummary[]> {
-    return this.#request<MessageSummary[]>(`/api/v1/inboxes/me/messages?limit=${limit}`, this.#authenticated(token, signal))
+  async listMessages(token = '', limit = 100, cursor = '', signal?: AbortSignal): Promise<MessagePage> {
+    const query = new URLSearchParams({ limit: String(limit) })
+    if (cursor) query.set('cursor', cursor)
+    const envelope = await this.#requestEnvelope<MessageSummary[]>(`/api/v1/inboxes/me/messages?${query}`, this.#authenticated(token, signal))
+    return { items: envelope.data, nextCursor: envelope.pagination?.next_cursor || '' }
   }
 
   getMessage(token: string, messageID: string, signal?: AbortSignal): Promise<MessageDetail> {
@@ -111,10 +117,15 @@ export class MailWispClient {
 
   #csrfHeaders(token = ''): Record<string, string> {
     if (token) return {}
-	return this.#csrfToken ? { 'X-MailWisp-CSRF': this.#csrfToken } : {}
+    return this.#csrfToken ? { 'X-MailWisp-CSRF': this.#csrfToken } : {}
   }
 
   async #request<T>(path: string, init: RequestInit): Promise<T> {
+    const envelope = await this.#requestEnvelope<T>(path, init)
+    return envelope.data
+  }
+
+  async #requestEnvelope<T>(path: string, init: RequestInit): Promise<DataEnvelope<T>> {
     let response: Response
     try {
       response = await fetch(this.#baseURL + path, {
@@ -129,7 +140,7 @@ export class MailWispClient {
       throw new APIError(0, { error: { code: 'network_error', message: 'Network request failed', request_id: '' } })
     }
     if (response.status === 204) {
-      return undefined as T
+      return { data: undefined as T }
     }
     const payload = await response.json().catch(() => undefined) as DataEnvelope<T> | ErrorEnvelope | undefined
     if (!response.ok) {
@@ -138,6 +149,6 @@ export class MailWispClient {
     if (!payload || !('data' in payload)) {
       throw new APIError(response.status)
     }
-    return payload.data
+    return payload as DataEnvelope<T>
   }
 }

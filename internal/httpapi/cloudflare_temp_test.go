@@ -170,8 +170,8 @@ func (*cloudflareTempMailboxStub) Get(context.Context, message.InboxID) (mailbox
 	return mailbox.Inbox{ID: cloudflareTempInboxID, Address: "demoname@mailwisp.test", Status: "active", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}, nil
 }
 func (*cloudflareTempMailboxStub) Delete(context.Context, message.InboxID) error { return nil }
-func (*cloudflareTempMailboxStub) ListMessages(context.Context, message.InboxID, int) ([]mailbox.MessageSummary, error) {
-	return []mailbox.MessageSummary{}, nil
+func (*cloudflareTempMailboxStub) ListMessages(context.Context, message.InboxID, mailbox.CursorPage) (mailbox.CursorMessagePage, error) {
+	return mailbox.CursorMessagePage{Items: []mailbox.MessageSummary{}}, nil
 }
 func (*cloudflareTempMailboxStub) ListMessagePage(context.Context, message.InboxID, int, int) (mailbox.MessagePage, error) {
 	return mailbox.MessagePage{Items: []mailbox.MessageSummary{{ID: cloudflareTempMessageID, EnvelopeSender: "sender@example.com", Subject: "Code", ReceivedAt: time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC), SizeBytes: 11}}, Total: 1, Unread: 1}, nil

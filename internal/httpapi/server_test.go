@@ -226,6 +226,52 @@ func TestAttachmentDownloadStreamsOwnedContent(t *testing.T) {
 	}
 }
 
+func TestMessageListPreservesDataArrayAndReturnsNextCursor(t *testing.T) {
+	before := mailbox.MessageCursor{ReceivedAt: time.Date(2026, 7, 16, 2, 0, 0, 123456000, time.UTC), ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb12"}
+	next := mailbox.MessageCursor{ReceivedAt: time.Date(2026, 7, 16, 1, 0, 0, 654321000, time.UTC), ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb13"}
+	encodedBefore, err := encodeMessageCursor(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &mailboxAPIStub{listResult: mailbox.CursorMessagePage{
+		Items: []mailbox.MessageSummary{{ID: next.ID, ReceivedAt: next.ReceivedAt}},
+		Next:  &next,
+	}}
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetMailboxService(service, &authStub{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/inboxes/me/messages?limit=2&cursor="+encodedBefore, nil)
+	request.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("message list status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if service.listRequest.Limit != 2 || service.listRequest.Before == nil || service.listRequest.Before.ID != before.ID || !service.listRequest.Before.ReceivedAt.Equal(before.ReceivedAt) {
+		t.Fatalf("message list request = %+v", service.listRequest)
+	}
+	var response struct {
+		Data       []mailbox.MessageSummary `json:"data"`
+		Pagination struct {
+			NextCursor string `json:"next_cursor"`
+		} `json:"pagination"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	decodedNext, err := decodeMessageCursor(response.Pagination.NextCursor)
+	if err != nil || len(response.Data) != 1 || decodedNext == nil || decodedNext.ID != next.ID || !decodedNext.ReceivedAt.Equal(next.ReceivedAt) {
+		t.Fatalf("message list response = %+v, decoded = %+v, error = %v", response, decodedNext, err)
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/api/v1/inboxes/me/messages?cursor=tampered", nil)
+	invalid.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, invalid)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_pagination"`) {
+		t.Fatalf("invalid cursor response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 type readinessStub struct {
 	err error
 }
@@ -243,7 +289,11 @@ func (*authStub) Authenticate(context.Context, string, ...auth.Scope) (auth.Prin
 	return auth.Principal{InboxID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Scopes: scopes, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-type mailboxAPIStub struct{ creates int }
+type mailboxAPIStub struct {
+	creates     int
+	listRequest mailbox.CursorPage
+	listResult  mailbox.CursorMessagePage
+}
 
 func (s *mailboxAPIStub) Create(context.Context, mailbox.CreateRequest) (mailbox.CreatedInbox, error) {
 	s.creates++
@@ -253,8 +303,12 @@ func (*mailboxAPIStub) Get(context.Context, message.InboxID) (mailbox.Inbox, err
 	return mailbox.Inbox{ID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Address: "demo@mailwisp.test", Status: "active"}, nil
 }
 func (*mailboxAPIStub) Delete(context.Context, message.InboxID) error { return nil }
-func (*mailboxAPIStub) ListMessages(context.Context, message.InboxID, int) ([]mailbox.MessageSummary, error) {
-	return []mailbox.MessageSummary{}, nil
+func (s *mailboxAPIStub) ListMessages(_ context.Context, _ message.InboxID, request mailbox.CursorPage) (mailbox.CursorMessagePage, error) {
+	s.listRequest = request
+	if s.listResult.Items == nil {
+		s.listResult.Items = []mailbox.MessageSummary{}
+	}
+	return s.listResult, nil
 }
 func (*mailboxAPIStub) GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error) {
 	return mailbox.MessageDetail{}, nil

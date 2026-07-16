@@ -96,10 +96,39 @@ func TestOpenAttachmentValidatesMetadataAndStreamsRawPart(t *testing.T) {
 	}
 }
 
+func TestListMessagesUsesStableCursorBoundary(t *testing.T) {
+	first := MessageSummary{ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb11", ReceivedAt: time.Date(2026, 7, 16, 2, 0, 0, 0, time.UTC)}
+	second := MessageSummary{ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb12", ReceivedAt: time.Date(2026, 7, 16, 1, 0, 0, 0, time.UTC)}
+	third := MessageSummary{ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb13", ReceivedAt: time.Date(2026, 7, 16, 0, 0, 0, 0, time.UTC)}
+	before := &MessageCursor{ReceivedAt: first.ReceivedAt, ID: first.ID}
+	repository := &repositoryStub{messagePage: MessagePage{Items: []MessageSummary{first, second, third}}}
+	service, err := NewService(repository, &issuerStub{}, &contentStub{}, Options{
+		PublicDomains: []string{"mailwisp.test"}, DefaultTTL: time.Hour, MaxTTL: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.ListMessages(context.Background(), "018f26e5-8f04-7b44-8ba2-4a8f434dcb10", CursorPage{Limit: 2, Before: before})
+	if err != nil {
+		t.Fatalf("ListMessages() error = %v", err)
+	}
+	if repository.page.Limit != 3 || repository.page.Before != before {
+		t.Fatalf("repository page = %+v", repository.page)
+	}
+	if len(page.Items) != 2 || page.Next == nil || page.Next.ID != second.ID || !page.Next.ReceivedAt.Equal(second.ReceivedAt) {
+		t.Fatalf("ListMessages() = %+v", page)
+	}
+	if _, err := service.ListMessages(context.Background(), "018f26e5-8f04-7b44-8ba2-4a8f434dcb10", CursorPage{Before: &MessageCursor{}}); err == nil {
+		t.Fatal("ListMessages(invalid cursor) succeeded")
+	}
+}
+
 type repositoryStub struct {
-	created mailboxInbox
-	purged  string
-	detail  MessageDetail
+	created     mailboxInbox
+	purged      string
+	detail      MessageDetail
+	page        Page
+	messagePage MessagePage
 }
 
 type mailboxInbox = Inbox
@@ -118,8 +147,9 @@ func (r *repositoryStub) PurgeInbox(_ context.Context, id message.InboxID) error
 	r.purged = string(id)
 	return nil
 }
-func (r *repositoryStub) ListMessages(context.Context, message.InboxID, Page) (MessagePage, error) {
-	return MessagePage{}, nil
+func (r *repositoryStub) ListMessages(_ context.Context, _ message.InboxID, page Page) (MessagePage, error) {
+	r.page = page
+	return r.messagePage, nil
 }
 func (r *repositoryStub) GetMessage(context.Context, message.InboxID, message.MessageID) (MessageDetail, error) {
 	return r.detail, nil

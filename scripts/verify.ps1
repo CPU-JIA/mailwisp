@@ -107,6 +107,15 @@ function Assert-MailWispTokenDetection {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $env:GOTOOLCHAIN = 'go1.26.5'
+$containerGoProxy = $env:GOPROXY
+if ([string]::IsNullOrWhiteSpace($containerGoProxy)) {
+    $containerGoProxy = (& go env GOPROXY | Select-Object -First 1)
+}
+if ([string]::IsNullOrWhiteSpace($containerGoProxy)) {
+    $containerGoProxy = 'https://proxy.golang.org,direct'
+}
+$containerGoProxy = $containerGoProxy.Trim()
+$env:GOPROXY = $containerGoProxy
 
 Push-Location -LiteralPath $repositoryRoot
 try {
@@ -132,7 +141,7 @@ try {
             docker run --rm --platform linux/amd64 `
                 --mount "type=bind,source=$repositoryRoot,target=/src,readonly" `
                 -w /src `
-                -e GOPROXY=https://proxy.golang.org,direct `
+                -e "GOPROXY=$containerGoProxy" `
                 $linuxGoImage `
                 sh -c 'go test ./... && go test -race ./...'
         }
@@ -169,7 +178,7 @@ try {
                     --mount "type=bind,source=$repositoryRoot,target=/src" `
                     --mount 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock' `
                     -w /src `
-                    -e GOPROXY=https://proxy.golang.org,direct `
+                    -e "GOPROXY=$containerGoProxy" `
                     -e MAILWISP_POSTFIX_EVIDENCE_DIR=/src/artifacts/postfix-integration `
                     $linuxGoImage `
                     sh -c 'go test -tags=integration ./internal/postfix -count=1 && go test -race -tags=integration ./internal/postfix -count=1'

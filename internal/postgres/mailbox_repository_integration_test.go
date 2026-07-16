@@ -382,6 +382,76 @@ func TestMailboxRepositoryEnforcesOwnershipAndDeletesUnreferencedContent(t *test
 	}
 }
 
+func TestMailboxRepositoryCursorPaginationCoversFullInboxDuringConcurrentInsert(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	repository, err := NewMailboxRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	inbox, err := repository.CreateInbox(context.Background(), mailbox.NewInbox{Address: "cursor@mailwisp.test", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := message.ContentRef{Key: contentKey("c"), SizeBytes: 128}
+	if _, err := pool.Exec(context.Background(), "INSERT INTO mail_contents (content_key, size_bytes) VALUES ($1, $2)", ref.Key, ref.SizeBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO messages (inbox_id, content_key, envelope_sender, received_at)
+		SELECT $1::uuid, $2, 'sender@example.net', $3::timestamptz - ((series / 5) * interval '1 second')
+		FROM generate_series(1, 500) AS series
+	`, string(inbox.ID), ref.Key, now); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(map[message.MessageID]struct{}, 500)
+	var before *mailbox.MessageCursor
+	var concurrentID message.MessageID
+	for pageNumber := 0; pageNumber < 10; pageNumber++ {
+		page, err := repository.ListMessages(context.Background(), inbox.ID, mailbox.Page{Limit: 100, Before: before})
+		if err != nil {
+			t.Fatalf("ListMessages(page %d) error = %v", pageNumber, err)
+		}
+		if len(page.Items) == 0 {
+			break
+		}
+		if pageNumber == 0 {
+			if err := pool.QueryRow(context.Background(), `
+				INSERT INTO messages (inbox_id, content_key, envelope_sender, received_at)
+				VALUES ($1::uuid, $2, 'newer@example.net', $3)
+				RETURNING id::text
+			`, string(inbox.ID), ref.Key, now.Add(time.Hour)).Scan(&concurrentID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, item := range page.Items {
+			if item.ID == concurrentID {
+				t.Fatalf("concurrent newer message %q leaked into an older cursor page", concurrentID)
+			}
+			if _, duplicate := seen[item.ID]; duplicate {
+				t.Fatalf("message %q appeared in more than one cursor page", item.ID)
+			}
+			seen[item.ID] = struct{}{}
+		}
+		last := page.Items[len(page.Items)-1]
+		before = &mailbox.MessageCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}
+		if pageNumber == 0 {
+			if _, err := repository.DeleteMessage(context.Background(), inbox.ID, last.ID); err != nil {
+				t.Fatalf("delete first-page cursor anchor: %v", err)
+			}
+		}
+	}
+	if len(seen) != 500 {
+		t.Fatalf("cursor pagination returned %d original messages, want 500", len(seen))
+	}
+	latest, err := repository.ListMessages(context.Background(), inbox.ID, mailbox.Page{Limit: 1})
+	if err != nil || len(latest.Items) != 1 || latest.Items[0].ID != concurrentID {
+		t.Fatalf("latest page = %+v, error = %v, want concurrent message %q", latest, err, concurrentID)
+	}
+}
+
 func TestMailboxDeleteKeepsContentSharedWithAnotherInbox(t *testing.T) {
 	pool := newIntegrationPool(t)
 	resetIntegrationDatabase(t, pool)

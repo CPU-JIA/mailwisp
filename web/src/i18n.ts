@@ -46,6 +46,9 @@ export const messages = {
       failed: '解析失败',
       unknownSender: '未知发件人',
       noSubject: '（无主题）',
+      loadMore: '加载更早来信',
+      loadingMore: '正在加载更早来信…',
+      loadMoreError: '更早的来信暂时没有加载成功。',
     },
     message: {
       back: '返回来信列表',
@@ -104,6 +107,7 @@ export const messages = {
       emptyTitle: 'No message has arrived on the wind', emptyBody: 'Use the address above for a sign-up or verification code. New mail will appear here.',
       signOut: 'Leave inbox', delete: 'Delete inbox permanently', deleteConfirm: 'Click again to delete permanently', pending: 'Parsing', failed: 'Parse failed',
       unknownSender: 'Unknown sender', noSubject: '(No subject)',
+      loadMore: 'Load earlier messages', loadingMore: 'Loading earlier messages…', loadMoreError: 'Earlier messages could not be loaded yet.',
     },
     message: {
       back: 'Back to messages', delete: 'Delete this message', text: 'Plain text', html: 'Safe HTML', htmlUnavailable: 'This message has no HTML content.',
