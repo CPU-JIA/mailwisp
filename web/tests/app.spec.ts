@@ -14,6 +14,27 @@ test('renders the Chinese welcome screen and switches language/theme', async ({ 
   await expect(page.locator('body')).not.toContainText('undefined')
 })
 
+test('does not let a late session restore overwrite a user-created inbox', async ({ page }) => {
+  const staleInbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb10', address: 'stale@example.com', status: 'active', expires_at: '2026-07-17T00:00:00Z', created_at: '2026-07-16T00:00:00Z' }
+  const createdInbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb11', address: 'created@example.com', status: 'active', expires_at: '2026-07-17T00:00:00Z', created_at: '2026-07-16T00:00:00Z' }
+  await page.route('**/api/v1/session', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { inbox: staleInbox, expires_at: staleInbox.expires_at, csrf_token: 'stale-csrf' } }) }).catch(() => undefined)
+  })
+  await page.route('**/api/v1/inboxes', async (route) => {
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox: createdInbox, capability: { token: 'wisp_cap_v1_created', expires_at: createdInbox.expires_at, scopes: ['inbox:read'] } } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '创建临时邮箱' }).click()
+  await expect(page.getByText('created@example.com')).toBeVisible()
+  await page.waitForTimeout(2_200)
+  await expect(page.getByText('created@example.com')).toBeVisible()
+  await expect(page.getByText('stale@example.com')).toHaveCount(0)
+})
+
 test('downloads an owned attachment from message detail', async ({ page }) => {
   const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb12', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
   const summary = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb13', envelope_sender: 'sender@example.com', subject: 'Attachment', preview: 'See file', received_at: '2026-07-15T00:00:00Z', parse_status: 'parsed', size_bytes: 128, has_attachments: true, seen: false }

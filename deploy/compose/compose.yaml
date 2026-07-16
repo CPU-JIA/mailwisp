@@ -171,6 +171,7 @@ services:
       - no-new-privileges:true
     networks:
       - backend
+      - smtp_ingress
     deploy:
       resources:
         limits:
@@ -208,3 +209,4 @@ networks:
   backend:
     internal: true
   frontend:
+  smtp_ingress:

@@ -1,6 +1,6 @@
 # MailWisp Docker Compose Deployment
 
-Docker Compose是MailWisp默认、主推荐的单机部署方式。它固定应用构建链、Nginx、Postfix、PostgreSQL与Certbot镜像Digest，只公开`25/tcp`、`80/tcp`和`443/tcp`；Go HTTP、LMTP和PostgreSQL仅存在于Compose内部网络。
+Docker Compose是MailWisp默认、主推荐的单机部署方式。它固定应用构建链、Nginx、Postfix、PostgreSQL与Certbot镜像Digest，只公开`25/tcp`、`80/tcp`和`443/tcp`；Go HTTP、LMTP和PostgreSQL仅存在于Compose内部网络。Postfix单独加入非内部`SMTP ingress`网络以接收发布端口流量，并通过内部backend把邮件交给LMTP；数据库与App不会加入SMTP入口网络。
 
 Host-native配置保留在`deploy/reference/`，只作为需要深度系统集成时的辅助Profile。
 
@@ -138,3 +138,16 @@ docker compose run --rm app restore /backups/<bundle-directory>
 ```
 
 脚本只把测试端口绑定到`127.0.0.1`，输出机器可读结果到`artifacts/compose-benchmark/`，并在结束后删除本次临时Volume。场景边界与结果解读见[`docs/benchmarks/README.md`](../../docs/benchmarks/README.md)。该核心Benchmark绕过Nginx与Postfix，不能冒充公网端到端容量。
+
+## 8. 生产浏览器E2E
+
+安装`web/package-lock.json`固定的依赖与Chromium后，可独立运行Canonical Compose真实链路：
+
+```powershell
+cd ../..
+npm --prefix web ci
+npm --prefix web exec playwright install chromium
+./scripts/e2e-compose.ps1
+```
+
+脚本使用正式App、Edge与Postfix镜像，通过临时自签证书和Loopback随机端口验证HTTPS Session、SMTP→LMTP→Parser、Sandbox HTML、附件和删除闭环。测试证书与Secret不会写入仓库，结束时删除本次容器、Network与Volume；失败证据位于`artifacts/production-e2e/`。该测试不替代公网DNS、MX、ACME或外部SMTP验收。
