@@ -162,8 +162,22 @@ try {
         }
 
         $env:MAILWISP_POSTFIX_EVIDENCE_DIR = Join-Path $repositoryRoot 'artifacts/postfix-integration'
-        Invoke-Native -Name 'Postfix LMTP integration tests' -Command { go test -tags=integration ./internal/postfix -count=1 }
-        Invoke-Native -Name 'Postfix LMTP integration race tests' -Command { go test -race -tags=integration ./internal/postfix -count=1 }
+        if ($IsWindows) {
+            Invoke-Native -Name 'Postfix LMTP integration and race tests in pinned Linux container' -Command {
+                docker run --rm --platform linux/amd64 `
+                    --network host `
+                    --mount "type=bind,source=$repositoryRoot,target=/src" `
+                    --mount 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock' `
+                    -w /src `
+                    -e GOPROXY=https://proxy.golang.org,direct `
+                    -e MAILWISP_POSTFIX_EVIDENCE_DIR=/src/artifacts/postfix-integration `
+                    $linuxGoImage `
+                    sh -c 'go test -tags=integration ./internal/postfix -count=1 && go test -race -tags=integration ./internal/postfix -count=1'
+            }
+        } else {
+            Invoke-Native -Name 'Postfix LMTP integration tests' -Command { go test -tags=integration ./internal/postfix -count=1 }
+            Invoke-Native -Name 'Postfix LMTP integration race tests' -Command { go test -race -tags=integration ./internal/postfix -count=1 }
+        }
         Invoke-Native -Name 'postgres integration tests' -Command { go test -tags=integration ./internal/postgres -count=1 }
         Invoke-Native -Name 'postgres integration race tests' -Command { go test -race -tags=integration ./internal/postgres -count=1 }
 

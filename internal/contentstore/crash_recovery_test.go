@@ -98,7 +98,12 @@ func TestContentStoreCrashHelper(t *testing.T) {
 	signalAndBlock := func(stage string) {
 		_, _ = fmt.Fprintf(os.Stdout, "CRASH_STAGE=%s\n", stage)
 		_ = os.Stdout.Sync()
-		select {}
+		// Keep a runtime timer pending until the parent force-terminates this
+		// process. A bare select{} can make the standalone test helper look
+		// globally deadlocked, allowing the Go runtime to exit before the
+		// parent calls Process.Kill. On Windows that race surfaces as
+		// TerminateProcess: Access is denied for the already-exited process.
+		time.Sleep(time.Hour)
 	}
 
 	var source io.Reader = bytes.NewReader(contentCrashPayload)
@@ -145,9 +150,7 @@ func (r *crashDuringWriteReader) Read(buffer []byte) (int, error) {
 
 func killContentStoreHelperAtStage(t *testing.T, root, stage string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestContentStoreCrashHelper$", "-test.v")
+	command := exec.Command(os.Args[0], "-test.run=^TestContentStoreCrashHelper$", "-test.v")
 	command.Env = append(os.Environ(),
 		contentCrashHelperEnvironment+"=1",
 		contentCrashRootEnvironment+"="+root,
@@ -179,24 +182,31 @@ func killContentStoreHelperAtStage(t *testing.T, root, stage string) {
 		reached <- errors.New("crash helper exited before target stage")
 	}()
 
+	timeout := time.NewTimer(20 * time.Second)
+	defer timeout.Stop()
 	select {
 	case err := <-reached:
 		if err != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			t.Fatalf("wait for crash stage %q: %v; stderr=%s", stage, err, stderr.String())
+			killErr := command.Process.Kill()
+			waitErr := command.Wait()
+			t.Fatalf("wait for crash stage %q: %v; cleanup kill=%v; wait=%v; stderr=%s", stage, err, killErr, waitErr, stderr.String())
 		}
-	case <-ctx.Done():
-		_ = command.Process.Kill()
-		_ = command.Wait()
-		t.Fatalf("wait for crash stage %q: %v; stderr=%s", stage, ctx.Err(), stderr.String())
+	case <-timeout.C:
+		killErr := command.Process.Kill()
+		waitErr := command.Wait()
+		t.Fatalf("wait for crash stage %q: timeout; cleanup kill=%v; wait=%v; stderr=%s", stage, killErr, waitErr, stderr.String())
 	}
 
 	if err := command.Process.Kill(); err != nil {
-		_ = command.Wait()
-		t.Fatalf("kill crash helper at %q: %v", stage, err)
+		waitErr := command.Wait()
+		t.Fatalf("force-terminate crash helper at %q: %v; wait=%v; stderr=%s", stage, err, waitErr, stderr.String())
 	}
-	if err := command.Wait(); err == nil {
+	waitErr := command.Wait()
+	if waitErr == nil {
 		t.Fatalf("crash helper at %q exited successfully, want forced termination", stage)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("wait for force-terminated crash helper at %q: %v", stage, waitErr)
 	}
 }
