@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +95,7 @@ func testQueueSurvivesRestart(t *testing.T, postfix *postfixFixture, lmtpPort in
 	receiver := newRecordingReceiver(0)
 	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
 	defer service.stop(t)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
 	flushQueue(t, postfix.container)
 
 	attempt := receiver.next(t)
@@ -106,6 +108,7 @@ func testTemporaryFailureRetries(t *testing.T, postfix *postfixFixture, lmtpPort
 	receiver := newRecordingReceiver(1)
 	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
 	defer service.stop(t)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
 
 	raw := rawMessage("temporary-failure", "Temporary failure", "retry after LMTP 451")
 	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
@@ -129,6 +132,7 @@ func testStoragePressureRetries(t *testing.T, postfix *postfixFixture, lmtpPort 
 	receiver.capacityFailures = 1
 	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
 	defer service.stop(t)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
 
 	raw := rawMessage("storage-pressure", "Storage pressure", "retry after LMTP 452")
 	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
@@ -158,6 +162,7 @@ func testLostAcknowledgementDuplicates(t *testing.T, postfix *postfixFixture, lm
 	}
 	service := startLMTP(t, lmtpPort, resolver, receiver, wrapFirstDeliveryAcknowledgement)
 	defer service.stop(t)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
 
 	raw := rawMessage("lost-ack", "Lost acknowledgement", "commit succeeds before acknowledgement is lost")
 	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
@@ -191,6 +196,7 @@ func testUnknownRecipientIsPermanent(t *testing.T, postfix *postfixFixture, lmtp
 	receiver := newRecordingReceiver(0)
 	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
 	defer service.stop(t)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
 
 	const unknownRecipient = "missing@example.test"
 	raw := rawMessage("unknown-recipient", "Unknown recipient", "this delivery must not be retried")
@@ -362,6 +368,28 @@ func execOutputBestEffort(ctx context.Context, container testcontainers.Containe
 		return append(output, []byte(fmt.Sprintf("\nexit code: %d", exitCode))...)
 	}
 	return output
+}
+
+func waitForLMTPReachableFromPostfix(t *testing.T, container testcontainers.Container, port int) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	var lastResult string
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		exitCode, reader, execErr := container.Exec(ctx, []string{
+			"nc", "-z", "-w", "1", "host.testcontainers.internal", strconv.Itoa(port),
+		}, tcexec.Multiplexed())
+		output, readErr := io.ReadAll(reader)
+		cancel()
+		if execErr == nil && readErr == nil && exitCode == 0 {
+			return
+		}
+		lastResult = fmt.Sprintf("exit=%d exec=%v read=%v output=%s", exitCode, execErr, readErr, output)
+		if time.Now().After(deadline) {
+			t.Fatalf("Postfix container cannot reach LMTP listener on port %d: %s", port, lastResult)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func submitSMTP(t *testing.T, address, sender, recipient string, raw []byte) string {
@@ -662,22 +690,22 @@ func (l *deliveryAckDropListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	drop := false
-	l.once.Do(func() { drop = true })
-	if !drop {
-		return connection, nil
-	}
-	return &deliveryAckDropConn{Conn: connection}, nil
+	return &deliveryAckDropConn{Conn: connection, once: &l.once}, nil
 }
 
 type deliveryAckDropConn struct {
 	net.Conn
+	once *sync.Once
 }
 
 func (c *deliveryAckDropConn) Write(data []byte) (int, error) {
 	if bytes.Contains(data, []byte(" delivered\r\n")) {
-		_ = c.Conn.Close()
-		return 0, io.ErrClosedPipe
+		drop := false
+		c.once.Do(func() { drop = true })
+		if drop {
+			_ = c.Conn.Close()
+			return 0, io.ErrClosedPipe
+		}
 	}
 	return c.Conn.Write(data)
 }
