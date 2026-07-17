@@ -3,31 +3,38 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"mailwisp/internal/app"
+	"mailwisp/internal/buildinfo"
 	"mailwisp/internal/config"
 	"mailwisp/internal/postgres"
 	"mailwisp/internal/telemetry"
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(arguments []string) error {
+func run(arguments []string, stdout io.Writer) error {
 	command, err := parseCommand(arguments)
 	if err != nil {
 		return err
 	}
+	if command.role == "version" {
+		return writeVersion(stdout, command.asJSON)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -91,6 +98,7 @@ func run(arguments []string) error {
 type command struct {
 	role          string
 	repairOrphans bool
+	asJSON        bool
 	path          string
 }
 
@@ -101,6 +109,12 @@ func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 1 && (arguments[0] == "serve" || arguments[0] == "migrate" || arguments[0] == "reconcile" || arguments[0] == "cleanup") {
 		return command{role: arguments[0]}, nil
 	}
+	if len(arguments) == 1 && arguments[0] == "version" {
+		return command{role: "version"}, nil
+	}
+	if len(arguments) == 2 && arguments[0] == "version" && arguments[1] == "--json" {
+		return command{role: "version", asJSON: true}, nil
+	}
 	if len(arguments) == 2 && arguments[0] == "reconcile" && arguments[1] == "--repair-orphans" {
 		return command{role: "reconcile", repairOrphans: true}, nil
 	}
@@ -110,5 +124,21 @@ func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 3 && arguments[0] == "backup" && arguments[1] == "verify" && arguments[2] != "" {
 		return command{role: "backup-verify", path: arguments[2]}, nil
 	}
-	return command{}, errors.New("usage: mailwisp [serve|migrate|cleanup|reconcile [--repair-orphans]|backup <directory>|backup verify <bundle-directory>|restore <bundle-directory>]")
+	return command{}, errors.New("usage: mailwisp [serve|migrate|cleanup|reconcile [--repair-orphans]|backup <directory>|backup verify <bundle-directory>|restore <bundle-directory>|version [--json]]")
+}
+
+func writeVersion(output io.Writer, asJSON bool) error {
+	info := buildinfo.Current()
+	if asJSON {
+		encoder := json.NewEncoder(output)
+		encoder.SetEscapeHTML(false)
+		if err := encoder.Encode(info); err != nil {
+			return fmt.Errorf("write version: %w", err)
+		}
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "%s %s (commit %s, built %s)\n", info.Name, info.Version, info.Commit, info.BuildDate); err != nil {
+		return fmt.Errorf("write version: %w", err)
+	}
+	return nil
 }

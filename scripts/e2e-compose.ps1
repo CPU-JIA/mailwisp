@@ -10,6 +10,11 @@ param(
 
     [string]$OutputDirectory = 'artifacts/production-e2e',
 
+    [string[]]$ComposeFiles,
+
+    [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z_.-]{0,127}$')]
+    [string]$ImageTag,
+
     [switch]$SkipBuild
 )
 
@@ -289,14 +294,26 @@ if (-not $fixtureRoot.StartsWith($temporaryPrefix, $pathComparison)) {
     throw 'Production E2E fixture path escaped the temporary directory.'
 }
 $projectName = "mailwisp-e2e-" + [guid]::NewGuid().ToString('N').Substring(0, 12)
-$composeFile = Join-Path $repositoryRoot 'deploy/compose/compose.yaml'
+$composeFilesResolved = if ($null -eq $ComposeFiles -or $ComposeFiles.Count -eq 0) {
+    @((Join-Path $repositoryRoot 'deploy/compose/compose.yaml'))
+} else {
+    @($ComposeFiles | ForEach-Object { [System.IO.Path]::GetFullPath($_) })
+}
+foreach ($candidate in $composeFilesResolved) {
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "Production E2E Compose file is missing: $candidate" }
+    $repositoryPrefix = $repositoryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $candidate.StartsWith($repositoryPrefix, $pathComparison)) { throw "Production E2E Compose file escaped the repository: $candidate" }
+    Assert-NoReparsePoint -Root $repositoryRoot -Child $candidate
+}
 $e2eComposeFile = Join-Path $repositoryRoot 'deploy/compose/production-e2e.compose.yaml'
-$composeArguments = @('-p', $projectName, '-f', $composeFile, '-f', $e2eComposeFile)
+$composeArguments = @('-p', $projectName)
+foreach ($candidate in $composeFilesResolved) { $composeArguments += @('-f', $candidate) }
+$composeArguments += @('-f', $e2eComposeFile)
 $managedEnvironment = @(
     'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
     'MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE', 'MAILWISP_WEB_DOMAIN', 'MAILWISP_SMTP_HOST',
     'MAILWISP_MAIL_DOMAIN', 'MAILWISP_CERT_NAME', 'MAILWISP_E2E_CERT_ROOT', 'MAILWISP_E2E_HTTP_PORT',
-    'MAILWISP_E2E_HTTPS_PORT', 'MAILWISP_E2E_SMTP_PORT', 'MAILWISP_E2E_BASE_URL'
+    'MAILWISP_E2E_HTTPS_PORT', 'MAILWISP_E2E_SMTP_PORT', 'MAILWISP_E2E_BASE_URL', 'MAILWISP_IMAGE_TAG'
 )
 $originalEnvironment = @{}
 foreach ($name in $managedEnvironment) { $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -331,6 +348,7 @@ try {
     $env:MAILWISP_E2E_HTTPS_PORT = [string]$HTTPSPort
     $env:MAILWISP_E2E_SMTP_PORT = [string]$SMTPPort
     $env:MAILWISP_E2E_BASE_URL = "https://127.0.0.1:$HTTPSPort"
+    if (-not [string]::IsNullOrWhiteSpace($ImageTag)) { $env:MAILWISP_IMAGE_TAG = $ImageTag }
 
     $stage = 'Docker availability'
     Invoke-Native -Name 'docker info' -Command { docker info --format '{{.ServerVersion}}' }
