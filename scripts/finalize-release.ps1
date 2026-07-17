@@ -16,6 +16,7 @@ $build = Get-Content -Raw -LiteralPath $buildOutputPath | ConvertFrom-Json -Date
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $build.version }
 if ($Version -ne $build.version) { throw "Finalize version $Version does not match build version $($build.version)." }
 if ($build.git_dirty -and -not $AllowDirty) { throw 'Final release evidence cannot be produced from a dirty Git worktree.' }
+if ($build.image_timestamp_rewrite -ne $true) { throw 'Release images were not exported with deterministic timestamp rewriting.' }
 
 $archive = Join-Path $artifactRoot "mailwisp-$Version-linux-amd64.tar.gz"
 $sbomIndexPath = Join-Path $artifactRoot 'sbom/sbom-index.json'
@@ -76,6 +77,7 @@ $evidencePath = Join-Path $artifactRoot 'release-evidence.json'
         docker_buildkit_version = $build.docker_buildkit_version
         docker_buildkit_image = $build.docker_buildkit_image
         build_cache = $build.build_cache
+        image_timestamp_rewrite = $build.image_timestamp_rewrite
     }
     archive = [ordered]@{ file = [System.IO.Path]::GetFileName($archive); sha256 = $archiveHash; size_bytes = (Get-Item -LiteralPath $archive).Length }
     sbom = [ordered]@{ format = $sbom.format; syft_version = $sbom.syft_version; documents = @($sbom.documents).Count }

@@ -118,6 +118,7 @@ function Assert-BuildOutput {
         $Build.docker_buildkit_version -ne $VersionLock.MAILWISP_BUILDKIT_VERSION -or
         $Build.docker_buildkit_image -ne $VersionLock.MAILWISP_BUILDKIT_IMAGE -or
         $Build.build_cache -ne 'disabled-isolated-builder' -or
+        $Build.image_timestamp_rewrite -ne $true -or
         [string]::IsNullOrWhiteSpace($Build.docker_engine_version)) {
         throw 'Release build output does not match the locked container toolchain.'
     }
@@ -213,7 +214,10 @@ try {
     $stage = 'inner checksums'
     $innerCount = Assert-ChecksumManifest -Root $bundleRoot -Manifest (Join-Path $bundleRoot 'SHA256SUMS') -RequireComplete
     $manifest = Get-Content -Raw -LiteralPath (Join-Path $bundleRoot 'release.json') | ConvertFrom-Json -DateKind String
-    if ($manifest.version -ne $Version -or $manifest.git_commit -ne $build.git_commit -or $manifest.platform -ne 'linux/amd64' -or $manifest.git_dirty -ne $build.git_dirty) {
+    if ($manifest.version -ne $Version -or $manifest.git_commit -ne $build.git_commit -or $manifest.platform -ne 'linux/amd64' -or
+        $manifest.git_dirty -ne $build.git_dirty -or $manifest.docker_buildx_version -ne $build.docker_buildx_version -or
+        $manifest.docker_buildkit_version -ne $build.docker_buildkit_version -or $manifest.docker_buildkit_image -ne $build.docker_buildkit_image -or
+        $manifest.build_cache -ne $build.build_cache -or $manifest.image_timestamp_rewrite -ne $true) {
         throw 'Release manifest identity does not match build output.'
     }
 

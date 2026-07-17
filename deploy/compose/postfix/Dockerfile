@@ -21,7 +21,7 @@ LABEL org.opencontainers.image.title="MailWisp Postfix" \
       org.opencontainers.image.created="$MAILWISP_BUILD_DATE"
 COPY --from=postfix-packages / /tmp/mailwisp-apks/
 RUN apk --no-network --repositories-file /dev/null add /tmp/mailwisp-apks/*.apk \
-    && rm -rf /tmp/mailwisp-apks
+    && rm -rf /tmp/mailwisp-apks /var/log/apk.log
 COPY --chmod=0755 deploy/compose/postfix/entrypoint.sh /usr/local/bin/mailwisp-postfix-entrypoint
 EXPOSE 25
 ENTRYPOINT ["/usr/local/bin/mailwisp-postfix-entrypoint"]

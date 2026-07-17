@@ -223,6 +223,8 @@ try {
         edge = "mailwisp/edge:$Version"
         postfix = "mailwisp/postfix:$Version"
     }
+    $imageExportRoot = Assert-MailWispArtifactPath -RepositoryRoot $repositoryRoot -Path (Join-Path $artifactRoot 'image-exports')
+    [System.IO.Directory]::CreateDirectory($imageExportRoot) | Out-Null
     $releaseBuilderName = 'mailwisp-release-' + [guid]::NewGuid().ToString('N').Substring(0, 16)
     Invoke-Native -Name 'isolated release builder creation' -Command {
         docker buildx create --name $releaseBuilderName --driver docker-container --driver-opt "image=$buildKitImage" | Out-Null
@@ -235,27 +237,35 @@ try {
         throw "BuildKit $expectedBuildKitVersion is required by the isolated release builder."
     }
     $commonBuildArguments = @(
-        '--builder', $releaseBuilderName, '--platform', 'linux/amd64', '--pull', '--no-cache', '--load', '--provenance=false',
+        '--builder', $releaseBuilderName, '--platform', 'linux/amd64', '--pull', '--no-cache', '--provenance=false',
         '--build-arg', "MAILWISP_VERSION=$Version",
         '--build-arg', "MAILWISP_COMMIT=$Commit",
         '--build-arg', "MAILWISP_BUILD_DATE=$buildDate",
         '--build-arg', "SOURCE_DATE_EPOCH=$sourceDateEpoch"
     )
     foreach ($target in @('app', 'maintenance', 'edge')) {
+        $targetImageArchive = Join-Path $imageExportRoot "$target.tar"
         $dockerArguments = @('buildx', 'build') + $commonBuildArguments + @(
+            '--output', "type=docker,dest=$targetImageArchive,rewrite-timestamp=true",
             '--target', $target,
             '--tag', $imageReferences[$target],
             '--file', (Join-Path $repositoryRoot 'deploy/compose/Dockerfile'),
             $repositoryRoot
         )
         Invoke-Native -Name "$target release image build" -Command { docker @dockerArguments }
+        Invoke-Native -Name "$target reproducible image load" -Command { docker load --input $targetImageArchive | Out-Null }
+        Remove-Item -LiteralPath $targetImageArchive -Force
     }
+    $postfixImageArchive = Join-Path $imageExportRoot 'postfix.tar'
     $postfixArguments = @('buildx', 'build') + $commonBuildArguments + @(
+        '--output', "type=docker,dest=$postfixImageArchive,rewrite-timestamp=true",
         '--tag', $imageReferences.postfix,
         '--file', (Join-Path $repositoryRoot 'deploy/compose/postfix/Dockerfile'),
         $repositoryRoot
     )
     Invoke-Native -Name 'postfix release image build' -Command { docker @postfixArguments }
+    Invoke-Native -Name 'postfix reproducible image load' -Command { docker load --input $postfixImageArchive | Out-Null }
+    Remove-MailWispArtifactDirectory -RepositoryRoot $repositoryRoot -Path $imageExportRoot
 
     $images = [ordered]@{}
     foreach ($name in $imageReferences.Keys) {
@@ -293,6 +303,7 @@ try {
         docker_buildkit_version = $expectedBuildKitVersion
         docker_buildkit_image = $buildKitImage
         build_cache = 'disabled-isolated-builder'
+        image_timestamp_rewrite = $true
         images = $images
     }
     $releaseManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundleRoot 'release.json') -Encoding utf8NoBOM
@@ -333,6 +344,7 @@ try {
         docker_buildkit_version = $expectedBuildKitVersion
         docker_buildkit_image = $buildKitImage
         build_cache = 'disabled-isolated-builder'
+        image_timestamp_rewrite = $true
         images = $images
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $artifactRoot 'build-output.json') -Encoding utf8NoBOM
 

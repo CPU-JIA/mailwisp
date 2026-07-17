@@ -67,7 +67,7 @@ LABEL org.opencontainers.image.title="MailWisp Maintenance" \
       org.opencontainers.image.created="$MAILWISP_BUILD_DATE"
 COPY --from=maintenance-packages / /tmp/mailwisp-apks/
 RUN apk --no-network --repositories-file /dev/null add /tmp/mailwisp-apks/*.apk \
-    && rm -rf /tmp/mailwisp-apks
+    && rm -rf /tmp/mailwisp-apks /var/log/apk.log
 COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=go-build /out/mailwisp /usr/local/bin/mailwisp
 RUN mkdir -p /var/lib/mailwisp/content /backups \

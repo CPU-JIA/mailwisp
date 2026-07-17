@@ -151,12 +151,50 @@ jobs:
         run: ./scripts/build-release.ps1 -Version $env:VERSION -Commit $env:COMMIT
 
       - name: Prove byte-for-byte reproducibility
+        id: reproducibility
         shell: bash
         env:
           VERSION: ${{ steps.identity.outputs.version }}
         run: |
-          cmp /tmp/mailwisp-first.tar.gz "artifacts/release/mailwisp-${VERSION}-linux-amd64.tar.gz"
-          sha256sum "artifacts/release/mailwisp-${VERSION}-linux-amd64.tar.gz"
+          set -euo pipefail
+          first=/tmp/mailwisp-first.tar.gz
+          second="artifacts/release/mailwisp-${VERSION}-linux-amd64.tar.gz"
+          if cmp --silent "$first" "$second"; then
+            sha256sum "$first" "$second"
+            exit 0
+          fi
+
+          diagnostic=artifacts/reproducibility-diagnostics
+          mkdir -p "$diagnostic" /tmp/mailwisp-repro-first /tmp/mailwisp-repro-second
+          sha256sum "$first" "$second" > "$diagnostic/archive-sha256.txt"
+          (cmp --verbose "$first" "$second" | head -n 200 || true) > "$diagnostic/archive-byte-differences.txt"
+          tar -tvzf "$first" > "$diagnostic/first-archive-list.txt"
+          tar -tvzf "$second" > "$diagnostic/second-archive-list.txt"
+          tar -xzf "$first" -C /tmp/mailwisp-repro-first
+          tar -xzf "$second" -C /tmp/mailwisp-repro-second
+          (cd /tmp/mailwisp-repro-first && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/first-files.sha256"
+          (cd /tmp/mailwisp-repro-second && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/second-files.sha256"
+          diff -u "$diagnostic/first-files.sha256" "$diagnostic/second-files.sha256" > "$diagnostic/file-digest-diff.txt" || true
+
+          first_images="$(find /tmp/mailwisp-repro-first -type f -path '*/images/mailwisp-images-linux-amd64.tar' -print -quit)"
+          second_images="$(find /tmp/mailwisp-repro-second -type f -path '*/images/mailwisp-images-linux-amd64.tar' -print -quit)"
+          [[ -n "$first_images" && -n "$second_images" ]]
+          mkdir -p /tmp/mailwisp-repro-first-images /tmp/mailwisp-repro-second-images
+          tar -xf "$first_images" -C /tmp/mailwisp-repro-first-images
+          tar -xf "$second_images" -C /tmp/mailwisp-repro-second-images
+          (cd /tmp/mailwisp-repro-first-images && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/first-image-files.sha256"
+          (cd /tmp/mailwisp-repro-second-images && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/second-image-files.sha256"
+          diff -u "$diagnostic/first-image-files.sha256" "$diagnostic/second-image-files.sha256" > "$diagnostic/image-digest-diff.txt" || true
+          exit 1
+
+      - name: Upload reproducibility failure evidence
+        if: failure() && steps.reproducibility.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-reproducibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/reproducibility-diagnostics
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Generate SPDX release SBOMs
         shell: pwsh
