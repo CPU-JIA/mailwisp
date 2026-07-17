@@ -1,6 +1,6 @@
 # ADR 0006：一致性Backup Bundle与空目标恢复
 
-状态：提议中，等待Reference恢复演练
+状态：已接受
 日期：2026-07-15
 
 ## 背景
@@ -57,9 +57,9 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 1. 取得目标数据库的独占维护锁。
 2. 严格解析Manifest，拒绝未知字段、未知版本、额外文件与路径穿越。
 3. 在任何目标写入前验证两个Component的SHA-256与字节数。
-4. 目标数据库不得包含MailWisp或其他Public Schema业务对象；Content Root必须不存在。
-5. 将Content Archive解压到目标同级随机目录，逐Object验证Canonical Path、Size与SHA-256，拒绝Symlink、Hard Link、Device与重复Path。
-6. 同步文件与目录后，先原子Rename为目标Content Root。
+4. 目标数据库不得包含MailWisp或其他Public Schema业务对象；Content Root必须不存在，或是空的直接挂载目录。已有文件、符号链接或非目录目标一律拒绝。
+5. 逐Object验证Canonical Path、Size与SHA-256，拒绝Symlink、Hard Link、Device与重复Path。目标Root不存在时先解压到同级随机目录；目标是现有空挂载目录时直接在该受限Root内解压，任何失败都删除已写入的局部对象并保留空挂载点。
+6. 同步文件与目录；不存在目标采用原子Rename安装，空挂载目录则在完整Archive验证成功后视为已安装。
 7. 使用官方`pg_restore --single-transaction --exit-on-error --no-owner --no-privileges`恢复数据库。
 8. `pg_restore`使用Single Transaction降低半提交风险；但网络或进程终止可能发生在Server Commit后、客户端确认前，因此任何Restore错误都保留已安装Content，禁止自动删除并扩大为Missing。
 9. Restore成功后运行Migration Readiness与完整Reconciliation；任何Missing、Corrupt或Orphan都使恢复失败。
@@ -93,7 +93,7 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 - 普通与Race Integration使用固定PostgreSQL 18.4官方工具通过。
 - 至少完成一次Reference Linux文件系统上的实际备份、删除、恢复与应用读取演练。
 
-上述证据完成前，本ADR保持“提议中”，不得宣称MailWisp已经具备可依赖的灾难恢复能力。
+上述证据完成前，本ADR保持“提议中”，不得宣称MailWisp已经具备可依赖的灾难恢复能力。2026-07-17的Canonical Compose Linux证据已满足本ADR的自动恢复验收条件；目标基础设施硬故障仍属于ADR 0004与上线验收边界。
 
 ## 2026-07-15阶段性实现证据
 
@@ -109,7 +109,22 @@ V1只允许恢复到空目标，不支持覆盖式或原地恢复：
 - PostgreSQL Server、`pg_dump`与`pg_restore`Major一致性验证；Gosec零Issue且未使用`#nosec`。
 - 固定PostgreSQL 18.4真实Bundle Round-trip Integration与Race Test已在GitHub Actions Linux完整门禁通过。
 
-尚未完成：
+仍属于目标基础设施验收：
 
-- 至少一次Reference Linux文件系统上的备份、删除、恢复、应用读取与人工Runbook演练。
-- 断电或宿主机硬重启条件下的Bundle发布与恢复验证。
+- 运维者按Runbook执行一次独立备份介质、人工审批与端口切换演练。
+- 断电、宿主机硬重启或云盘故障条件下的Bundle发布与恢复验证。
+
+## 2026-07-16 Canonical Compose演练实现
+
+ADR 0022新增Non-root Maintenance镜像、断网且只读的独立`backup-verifier`、兼容直接挂载空Content Volume的Restore语义，以及随机隔离Project上的自动灾备演练。现有卷仍保持`objects/sha256`位于卷根，不发生静默布局迁移。本地Docker Linux VM已经完成HTTPS/SMTP Seed、离线备份、原PostgreSQL/Content Volume删除、空目标恢复、Browser Session/Plaintext/HTML/附件读取、恢复后再次投递和零残留。
+
+## 2026-07-17 GitHub Ubuntu接受证据
+
+[`Verify MailWisp #29545090225`](https://github.com/CPU-JIA/mailwisp/actions/runs/29545090225)在`ubuntu-24.04`完成Linux Full Verification。Artifact `disaster-recovery-29545090225-1`证明：
+
+- Docker Compose为5.2.0，`pg_dump`与`pg_restore`均为18.4。
+- 原PostgreSQL与Content Volume已观察到删除，External Backup独立存活，空数据库在Restore前已观察。
+- 数据库快照、Content Catalog/Digest、原Browser Session、Plaintext、Sandbox HTML与附件恢复一致。
+- 恢复后再次SMTP投递成功，FK Orphan与非UUIDv7计数均为0，最终资源残留为0。
+
+同一Run的Artifact `production-e2e-29545090225-1`证明Canonical Nginx/Postfix/App/PostgreSQL浏览器与SMTP路径通过。至此本ADR从“提议中”转为“已接受”；该证据不替代目标服务器断电、云盘故障、真实ACME、STARTTLS、MX与外部收件验收。

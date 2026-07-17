@@ -123,6 +123,7 @@ func (m *Metrics) ObserveRetention(result string, inboxes, content int) {
 
 func (m *Metrics) registerPostgresPool(pool *pgxpool.Pool) {
 	gauges := []prometheus.Collector{
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mailwisp_postgres_pool_max_connections", Help: "Configured PostgreSQL pool connection limit."}, func() float64 { return float64(pool.Config().MaxConns) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mailwisp_postgres_pool_connections", Help: "Current PostgreSQL pool connections."}, func() float64 { return float64(pool.Stat().TotalConns()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mailwisp_postgres_pool_acquired", Help: "Currently acquired PostgreSQL connections."}, func() float64 { return float64(pool.Stat().AcquiredConns()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "mailwisp_postgres_pool_idle", Help: "Currently idle PostgreSQL connections."}, func() float64 { return float64(pool.Stat().IdleConns()) }),

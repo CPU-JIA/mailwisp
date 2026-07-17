@@ -81,7 +81,6 @@ services:
       - create_quota_hmac_key
     volumes:
       - content_data:/var/lib/mailwisp/content
-      - ./backups:/backups
     tmpfs:
       - /tmp:size=32m,mode=1777
     depends_on:
@@ -101,6 +100,43 @@ services:
     networks:
       - backend
       - frontend
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "2.0"
+          pids: 256
+
+  maintenance:
+    image: mailwisp/maintenance:${MAILWISP_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: deploy/compose/Dockerfile
+      target: maintenance
+    profiles: ["maintenance"]
+    command: ["maintenance-command-required"]
+    environment:
+      MAILWISP_POSTGRES_DSN: postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable
+      MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content
+    secrets:
+      - postgres_password
+    volumes:
+      - content_data:/var/lib/mailwisp/content
+      - ${MAILWISP_BACKUP_ROOT_SOURCE:-./backups}:/backups
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend
+    restart: "no"
     deploy:
       resources:
         limits:

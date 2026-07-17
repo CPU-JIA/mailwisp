@@ -21,7 +21,8 @@ type DatabaseRestorer interface {
 }
 
 // Restore verifies a bundle before mutation, installs content first, restores
-// PostgreSQL in one transaction, and then proves cross-store consistency.
+// PostgreSQL in one transaction, and then proves cross-store consistency. The
+// content target may be absent or an existing empty mount point.
 func Restore(ctx context.Context, bundleRoot, targetContentRoot string, database DatabaseRestorer) (Manifest, error) {
 	if database == nil {
 		return Manifest{}, errors.New("database restorer is required")
@@ -55,8 +56,19 @@ func Restore(ctx context.Context, bundleRoot, targetContentRoot string, database
 	if err != nil {
 		return Manifest{}, fmt.Errorf("resolve restore content root: %w", err)
 	}
-	if _, err := os.Lstat(absoluteContentRoot); err == nil {
-		return Manifest{}, errors.New("restore content root already exists")
+	contentRootExists := false
+	if info, err := os.Lstat(absoluteContentRoot); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return Manifest{}, errors.New("restore content root is not a directory")
+		}
+		entries, err := os.ReadDir(absoluteContentRoot)
+		if err != nil {
+			return Manifest{}, fmt.Errorf("inspect restore content root entries: %w", err)
+		}
+		if len(entries) != 0 {
+			return Manifest{}, errors.New("restore content root is not empty")
+		}
+		contentRootExists = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Manifest{}, fmt.Errorf("inspect restore content root: %w", err)
 	}
@@ -68,32 +80,39 @@ func Restore(ctx context.Context, bundleRoot, targetContentRoot string, database
 	if !parentInfo.IsDir() {
 		return Manifest{}, errors.New("restore content parent is not a directory")
 	}
-	stagingRoot, err := partialPath(absoluteContentRoot)
-	if err != nil {
-		return Manifest{}, err
-	}
-	_, restoreContentErr := contentstore.RestoreArchive(ctx, stagingRoot, contentArchive, contentstore.ArchiveStats{
+	restoreStats := contentstore.ArchiveStats{
 		Objects: verified.Manifest.Content.Objects,
 		Bytes:   verified.Manifest.Content.UncompressedBytes,
-	})
-	if restoreContentErr != nil {
-		return Manifest{}, restoreContentErr
 	}
 	contentInstalled := false
-	defer func() {
-		if !contentInstalled {
-			_ = os.RemoveAll(stagingRoot)
+	if contentRootExists {
+		if _, err := contentstore.RestoreArchive(ctx, absoluteContentRoot, contentArchive, restoreStats); err != nil {
+			return Manifest{}, err
 		}
-	}()
-	if err := os.Rename(stagingRoot, absoluteContentRoot); err != nil {
-		return Manifest{}, fmt.Errorf("install restored content root: %w", err)
+		contentInstalled = true
+	} else {
+		stagingRoot, err := partialPath(absoluteContentRoot)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if _, err := contentstore.RestoreArchive(ctx, stagingRoot, contentArchive, restoreStats); err != nil {
+			return Manifest{}, err
+		}
+		defer func() {
+			if !contentInstalled {
+				_ = os.RemoveAll(stagingRoot)
+			}
+		}()
+		if err := os.Rename(stagingRoot, absoluteContentRoot); err != nil {
+			return Manifest{}, fmt.Errorf("install restored content root: %w", err)
+		}
+		if err := syncDirectory(parent); err != nil {
+			_ = os.Rename(absoluteContentRoot, stagingRoot)
+			_ = syncDirectory(parent)
+			return Manifest{}, fmt.Errorf("sync restored content parent: %w", err)
+		}
+		contentInstalled = true
 	}
-	if err := syncDirectory(parent); err != nil {
-		_ = os.Rename(absoluteContentRoot, stagingRoot)
-		_ = syncDirectory(parent)
-		return Manifest{}, fmt.Errorf("sync restored content parent: %w", err)
-	}
-	contentInstalled = true
 
 	metadata, restoreDatabaseErr := database.Restore(ctx, databaseDump)
 	if restoreDatabaseErr != nil {

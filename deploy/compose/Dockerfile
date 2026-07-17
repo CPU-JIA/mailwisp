@@ -27,6 +27,17 @@ WORKDIR /var/lib/mailwisp
 ENTRYPOINT ["/usr/local/bin/mailwisp"]
 CMD ["serve"]
 
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS maintenance
+RUN apk add --no-cache postgresql18-client=18.4-r0
+COPY --from=go-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=go-build /out/mailwisp /usr/local/bin/mailwisp
+RUN mkdir -p /var/lib/mailwisp/content /backups \
+    && chown -R 65532:65532 /var/lib/mailwisp /backups
+USER 65532:65532
+WORKDIR /var/lib/mailwisp
+ENTRYPOINT ["/usr/local/bin/mailwisp"]
+CMD ["maintenance-command-required"]
+
 FROM nginx:1.30.3-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1 AS edge
 COPY --from=web-build /src/web/dist/ /usr/share/nginx/html/
 COPY deploy/compose/nginx/security-headers.conf /etc/nginx/snippets/mailwisp-security-headers.conf

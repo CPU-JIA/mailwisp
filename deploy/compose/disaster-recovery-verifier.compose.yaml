@@ -1,0 +1,9 @@
+services:
+  backup-verifier:
+    volumes: !override
+      - disaster_recovery_backup:/backups:ro
+
+volumes:
+  disaster_recovery_backup:
+    external: true
+    name: ${MAILWISP_DR_BACKUP_VOLUME:?set MAILWISP_DR_BACKUP_VOLUME}

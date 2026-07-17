@@ -1,0 +1,10 @@
+services:
+  maintenance:
+    volumes: !override
+      - content_data:/var/lib/mailwisp/content
+      - disaster_recovery_backup:/backups
+
+volumes:
+  disaster_recovery_backup:
+    external: true
+    name: ${MAILWISP_DR_BACKUP_VOLUME:?set MAILWISP_DR_BACKUP_VOLUME}

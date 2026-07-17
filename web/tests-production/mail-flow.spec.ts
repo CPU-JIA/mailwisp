@@ -1,11 +1,9 @@
-import { once } from 'node:events'
-import { createConnection } from 'node:net'
-import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
+import { parsePort, sendSMTPMessage } from '../tests-support/smtp'
 
-const smtpPort = parsePort(process.env.MAILWISP_E2E_SMTP_PORT)
+const smtpPort = parsePort(process.env.MAILWISP_E2E_SMTP_PORT, 'MAILWISP_E2E_SMTP_PORT')
 
 test('delivers SMTP through the production Compose stack and completes the browser lifecycle', async ({ page, context }) => {
   const pageErrors: string[] = []
@@ -44,7 +42,16 @@ test('delivers SMTP through the production Compose stack and completes the brows
 
   const subject = `Production path ${randomUUID()}`
   const attachment = 'MailWisp production attachment\n'
-  await sendSMTPMessage(address, subject, attachment)
+  await sendSMTPMessage({
+    port: smtpPort,
+    recipient: address,
+    subject,
+    textBody: 'Production pipeline body.',
+    htmlBody: '<p>HTML production body.</p><script>document.body.dataset.executed="true"</script><img src="https://tracker.invalid/pixel">',
+    attachmentName: 'proof.txt',
+    attachment,
+    attachmentContentType: 'text/plain',
+  })
 
   const messageButton = page.getByRole('button', { name: new RegExp(subject) })
   await expect(async () => {
@@ -81,87 +88,3 @@ test('delivers SMTP through the production Compose stack and completes the brows
   expect((await context.cookies()).some((cookie) => cookie.name === '__Host-mailwisp_session')).toBe(false)
   expect(pageErrors).toEqual([])
 })
-
-async function sendSMTPMessage(recipient: string, subject: string, attachment: string): Promise<void> {
-  const socket = createConnection({ host: '127.0.0.1', port: smtpPort })
-  socket.setTimeout(10_000, () => socket.destroy(new Error('SMTP session timed out')))
-  await once(socket, 'connect')
-  const lines = createInterface({ input: socket, crlfDelay: Number.POSITIVE_INFINITY })
-  const iterator = lines[Symbol.asyncIterator]()
-  const mixedBoundary = `mailwisp-mixed-${randomUUID()}`
-  const alternativeBoundary = `mailwisp-alt-${randomUUID()}`
-  const message = [
-    'From: Production Sender <sender@example.net>',
-    `To: ${recipient}`,
-    `Subject: ${subject}`,
-    `Date: ${new Date().toUTCString()}`,
-    `Message-ID: <${randomUUID()}@mailwisp.test>`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
-    '',
-    `--${mixedBoundary}`,
-    `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
-    '',
-    `--${alternativeBoundary}`,
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: 7bit',
-    '',
-    'Production pipeline body.',
-    `--${alternativeBoundary}`,
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: 7bit',
-    '',
-    '<p>HTML production body.</p><script>document.body.dataset.executed="true"</script><img src="https://tracker.invalid/pixel">',
-    `--${alternativeBoundary}--`,
-    `--${mixedBoundary}`,
-    'Content-Type: text/plain; name="proof.txt"',
-    'Content-Disposition: attachment; filename="proof.txt"',
-    'Content-Transfer-Encoding: base64',
-    '',
-    Buffer.from(attachment).toString('base64'),
-    `--${mixedBoundary}--`,
-  ].join('\r\n')
-
-  try {
-    await readReply(iterator, 220)
-    await writeLine(socket, 'EHLO production-e2e.mailwisp.test')
-    await readReply(iterator, 250)
-    await writeLine(socket, 'MAIL FROM:<sender@example.net>')
-    await readReply(iterator, 250)
-    await writeLine(socket, `RCPT TO:<${recipient}>`)
-    await readReply(iterator, 250)
-    await writeLine(socket, 'DATA')
-    await readReply(iterator, 354)
-    const dotStuffed = message.split('\r\n').map((line) => line.startsWith('.') ? `.${line}` : line).join('\r\n')
-    await writeLine(socket, `${dotStuffed}\r\n.`)
-    await readReply(iterator, 250)
-    await writeLine(socket, 'QUIT')
-    await readReply(iterator, 221)
-  } finally {
-    lines.close()
-    socket.destroy()
-  }
-}
-
-async function readReply(iterator: AsyncIterableIterator<string>, expectedCode: number): Promise<void> {
-  for (;;) {
-    const next = await iterator.next()
-    if (next.done || next.value.length < 4) throw new Error(`SMTP closed while waiting for ${expectedCode}`)
-    const actualCode = Number.parseInt(next.value.slice(0, 3), 10)
-    if (actualCode !== expectedCode) throw new Error(`SMTP returned ${next.value}; expected ${expectedCode}`)
-    if (next.value[3] === ' ') return
-    if (next.value[3] !== '-') throw new Error(`SMTP returned an invalid reply: ${next.value}`)
-  }
-}
-
-function writeLine(socket: ReturnType<typeof createConnection>, line: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    socket.write(`${line}\r\n`, (error) => error ? reject(error) : resolve())
-  })
-}
-
-function parsePort(raw: string | undefined): number {
-  const port = Number.parseInt(raw || '', 10)
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('MAILWISP_E2E_SMTP_PORT must be a valid TCP port')
-  return port
-}

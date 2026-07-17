@@ -28,6 +28,17 @@ func run(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if command.role == "backup-verify" {
+		logger := telemetry.NewLogger(slog.LevelInfo)
+		if _, err := app.VerifyBackup(ctx, logger, command.path); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
@@ -35,9 +46,6 @@ func run(arguments []string) error {
 
 	logger := telemetry.NewLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	switch command.role {
 	case "migrate":
@@ -96,8 +104,11 @@ func parseCommand(arguments []string) (command, error) {
 	if len(arguments) == 2 && arguments[0] == "reconcile" && arguments[1] == "--repair-orphans" {
 		return command{role: "reconcile", repairOrphans: true}, nil
 	}
-	if len(arguments) == 2 && (arguments[0] == "backup" || arguments[0] == "restore") && arguments[1] != "" {
+	if len(arguments) == 2 && (arguments[0] == "backup" || arguments[0] == "restore") && arguments[1] != "" && !(arguments[0] == "backup" && arguments[1] == "verify") {
 		return command{role: arguments[0], path: arguments[1]}, nil
 	}
-	return command{}, errors.New("usage: mailwisp [serve|migrate|cleanup|reconcile [--repair-orphans]|backup <directory>|restore <bundle-directory>]")
+	if len(arguments) == 3 && arguments[0] == "backup" && arguments[1] == "verify" && arguments[2] != "" {
+		return command{role: "backup-verify", path: arguments[2]}, nil
+	}
+	return command{}, errors.New("usage: mailwisp [serve|migrate|cleanup|reconcile [--repair-orphans]|backup <directory>|backup verify <bundle-directory>|restore <bundle-directory>]")
 }

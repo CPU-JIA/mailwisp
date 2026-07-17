@@ -113,6 +113,11 @@ function Assert-MailWispTokenDetection {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+$versionLock = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'deploy/compose/versions.lock') | ConvertFrom-StringData
+$prometheusToolImage = $versionLock.MAILWISP_PROMETHEUS_TOOL
+if ([string]::IsNullOrWhiteSpace($prometheusToolImage) -or $prometheusToolImage -notmatch '^prom/prometheus:v3\.13\.1@sha256:[a-f0-9]{64}$') {
+    throw 'MAILWISP_PROMETHEUS_TOOL must lock Prometheus v3.13.1 by SHA-256 digest.'
+}
 $env:GOTOOLCHAIN = 'go1.26.5'
 $containerGoProxy = $env:GOPROXY
 if ([string]::IsNullOrWhiteSpace($containerGoProxy)) {
@@ -217,8 +222,16 @@ try {
             $env:MAILWISP_MAIL_DOMAIN = 'example.com'
             $env:MAILWISP_CERT_NAME = 'mail.example.com'
             $composeFile = Join-Path $repositoryRoot 'deploy/compose/compose.yaml'
-            Invoke-Native -Name 'Docker Compose render' -Command { docker compose --profile tools -f $composeFile config --quiet }
-            Invoke-Native -Name 'Docker Compose production images' -Command { docker compose -f $composeFile build --pull app edge postfix }
+            $backupVerifierComposeFile = Join-Path $repositoryRoot 'deploy/compose/backup-verifier.compose.yaml'
+            Invoke-Native -Name 'Docker Compose render' -Command { docker compose --profile tools --profile maintenance -f $composeFile config --quiet }
+            Invoke-Native -Name 'Docker Compose independent backup verifier render' -Command { docker compose -f $backupVerifierComposeFile config --quiet }
+            Invoke-Native -Name 'Docker Compose production images' -Command { docker compose -f $composeFile build --pull app maintenance edge postfix }
+            $prometheusRules = Join-Path $repositoryRoot 'deploy/compose/prometheus-alerts.example.yml'
+            Invoke-Native -Name 'Prometheus alert rules syntax and PromQL validation' -Command {
+                docker run --rm --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges `
+                    --mount "type=bind,source=$prometheusRules,target=/rules.yml,readonly" `
+                    --entrypoint /bin/promtool $prometheusToolImage check rules /rules.yml
+            }
         } finally {
             Remove-Item Env:MAILWISP_ENV_FILE -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
@@ -267,6 +280,7 @@ try {
             Invoke-Native -Name 'production frontend build' -Command { npm run build }
             Invoke-Native -Name 'production frontend browser tests' -Command { npm run test:e2e }
             Invoke-Native -Name 'production Compose browser E2E' -Command { & (Join-Path $repositoryRoot 'scripts/e2e-compose.ps1') -SkipBuild }
+            Invoke-Native -Name 'Canonical Compose disaster recovery drill' -Command { & (Join-Path $repositoryRoot 'scripts/drill-compose-recovery.ps1') -SkipBuild }
             Invoke-Native -Name 'production frontend npm audit' -Command { npm audit --audit-level=low }
         } finally {
             Pop-Location
