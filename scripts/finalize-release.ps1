@@ -17,6 +17,16 @@ if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $build.version }
 if ($Version -ne $build.version) { throw "Finalize version $Version does not match build version $($build.version)." }
 if ($build.git_dirty -and -not $AllowDirty) { throw 'Final release evidence cannot be produced from a dirty Git worktree.' }
 if ($build.image_timestamp_rewrite -ne $true) { throw 'Release images were not exported with deterministic timestamp rewriting.' }
+$expectedImageArchives = @('app', 'edge', 'maintenance', 'postfix')
+$actualImageArchives = @($build.image_archives.PSObject.Properties | ForEach-Object Name | Sort-Object)
+if ($build.schema_version -ne 2 -or ($actualImageArchives -join ',') -ne ($expectedImageArchives -join ',')) {
+    throw 'Release build output does not identify the four deterministic image archives.'
+}
+foreach ($name in $expectedImageArchives) {
+    if ($build.image_archives.$name -ne "$($build.bundle_directory)/images/mailwisp-$name-linux-amd64.tar") {
+        throw "Release build output contains an invalid $name image archive path."
+    }
+}
 
 $archive = Join-Path $artifactRoot "mailwisp-$Version-linux-amd64.tar.gz"
 $sbomIndexPath = Join-Path $artifactRoot 'sbom/sbom-index.json'
@@ -78,6 +88,7 @@ $evidencePath = Join-Path $artifactRoot 'release-evidence.json'
         docker_buildkit_image = $build.docker_buildkit_image
         build_cache = $build.build_cache
         image_timestamp_rewrite = $build.image_timestamp_rewrite
+        image_archive_count = $actualImageArchives.Count
     }
     archive = [ordered]@{ file = [System.IO.Path]::GetFileName($archive); sha256 = $archiveHash; size_bytes = (Get-Item -LiteralPath $archive).Length }
     sbom = [ordered]@{ format = $sbom.format; syft_version = $sbom.syft_version; documents = @($sbom.documents).Count }

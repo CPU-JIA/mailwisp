@@ -102,15 +102,14 @@ function Assert-BuildOutput {
             if ($identifier -match '^0[0-9]+$') { throw 'Release build output contains an invalid numeric prerelease identifier.' }
         }
     }
-    if ($Build.schema_version -ne 1 -or $Build.product -ne 'MailWisp' -or $Build.version -ne $ExpectedVersion -or $Build.git_commit -notmatch '^[a-f0-9]{40}$' -or
+    if ($Build.schema_version -ne 2 -or $Build.product -ne 'MailWisp' -or $Build.version -ne $ExpectedVersion -or $Build.git_commit -notmatch '^[a-f0-9]{40}$' -or
         $Build.build_date -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' -or
         $Build.platform -ne 'linux/amd64' -or $Build.git_dirty -isnot [bool]) {
         throw 'Release build output identity schema is invalid.'
     }
     $bundleName = "mailwisp-$ExpectedVersion-linux-amd64"
     if ($Build.bundle_name -ne $bundleName -or $Build.bundle_directory -ne $bundleName -or
-        $Build.archive -ne "$bundleName.tar.gz" -or
-        $Build.image_archive -ne "$bundleName/images/mailwisp-images-linux-amd64.tar") {
+        $Build.archive -ne "$bundleName.tar.gz") {
         throw 'Release build output contains an unexpected artifact path.'
     }
     if ($Build.docker_compose_version -ne $VersionLock.MAILWISP_DOCKER_COMPOSE -or
@@ -122,15 +121,22 @@ function Assert-BuildOutput {
         [string]::IsNullOrWhiteSpace($Build.docker_engine_version)) {
         throw 'Release build output does not match the locked container toolchain.'
     }
-    if ($null -eq $Build.images) { throw 'Release build output does not contain image identities.' }
+    if ($null -eq $Build.images -or $null -eq $Build.image_archives) {
+        throw 'Release build output does not contain image identities and deterministic archives.'
+    }
     $expectedImages = @('app', 'edge', 'maintenance', 'postfix')
     $actualImages = @($Build.images.PSObject.Properties | ForEach-Object Name | Sort-Object)
     if (($actualImages -join ',') -ne ($expectedImages -join ',')) { throw 'Release build output contains an unexpected image set.' }
+    $actualArchives = @($Build.image_archives.PSObject.Properties | ForEach-Object Name | Sort-Object)
+    if (($actualArchives -join ',') -ne ($expectedImages -join ',')) { throw 'Release build output contains an unexpected image archive set.' }
     foreach ($name in $expectedImages) {
         $image = $Build.images.$name
         if ($image.reference -ne "mailwisp/${name}:$ExpectedVersion" -or $image.id -notmatch '^sha256:[a-f0-9]{64}$' -or
             $image.platform -ne 'linux/amd64') {
             throw "Release build output contains an invalid $name image identity."
+        }
+        if ($Build.image_archives.$name -ne "$bundleName/images/mailwisp-$name-linux-amd64.tar") {
+            throw "Release build output contains an invalid $name image archive path."
         }
     }
 }
@@ -214,11 +220,21 @@ try {
     $stage = 'inner checksums'
     $innerCount = Assert-ChecksumManifest -Root $bundleRoot -Manifest (Join-Path $bundleRoot 'SHA256SUMS') -RequireComplete
     $manifest = Get-Content -Raw -LiteralPath (Join-Path $bundleRoot 'release.json') | ConvertFrom-Json -DateKind String
-    if ($manifest.version -ne $Version -or $manifest.git_commit -ne $build.git_commit -or $manifest.platform -ne 'linux/amd64' -or
+    if ($manifest.schema_version -ne 2 -or $manifest.version -ne $Version -or $manifest.git_commit -ne $build.git_commit -or $manifest.platform -ne 'linux/amd64' -or
         $manifest.git_dirty -ne $build.git_dirty -or $manifest.docker_buildx_version -ne $build.docker_buildx_version -or
         $manifest.docker_buildkit_version -ne $build.docker_buildkit_version -or $manifest.docker_buildkit_image -ne $build.docker_buildkit_image -or
         $manifest.build_cache -ne $build.build_cache -or $manifest.image_timestamp_rewrite -ne $true) {
         throw 'Release manifest identity does not match build output.'
+    }
+    $manifestArchiveNames = @($manifest.image_archives.PSObject.Properties | ForEach-Object Name | Sort-Object)
+    $buildArchiveNames = @($build.image_archives.PSObject.Properties | ForEach-Object Name | Sort-Object)
+    if (($manifestArchiveNames -join ',') -ne ($buildArchiveNames -join ',')) {
+        throw 'Release manifest image archive set does not match build output.'
+    }
+    foreach ($name in $buildArchiveNames) {
+        if ($build.image_archives.$name -ne "$($build.bundle_directory)/$($manifest.image_archives.$name)") {
+            throw "Release manifest $name image archive path does not match build output."
+        }
     }
 
     $stage = 'release image replacement safety'
@@ -235,8 +251,11 @@ try {
     }
 
     $stage = 'release image load'
-    Invoke-Native -Name 'load release image archive' -Command {
-        docker load --input (Join-Path $bundleRoot 'images/mailwisp-images-linux-amd64.tar')
+    foreach ($property in @($manifest.image_archives.PSObject.Properties | Sort-Object Name)) {
+        $imageArchive = Resolve-SafeRelativePath -Root $bundleRoot -Relative ([string]$property.Value)
+        Invoke-Native -Name "load $($property.Name) release image archive" -Command {
+            docker load --input $imageArchive
+        }
     }
     foreach ($property in $build.images.PSObject.Properties) {
         $image = $property.Value

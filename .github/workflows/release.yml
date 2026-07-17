@@ -176,14 +176,33 @@ jobs:
           (cd /tmp/mailwisp-repro-second && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/second-files.sha256"
           diff -u "$diagnostic/first-files.sha256" "$diagnostic/second-files.sha256" > "$diagnostic/file-digest-diff.txt" || true
 
-          first_images="$(find /tmp/mailwisp-repro-first -type f -path '*/images/mailwisp-images-linux-amd64.tar' -print -quit)"
-          second_images="$(find /tmp/mailwisp-repro-second -type f -path '*/images/mailwisp-images-linux-amd64.tar' -print -quit)"
-          [[ -n "$first_images" && -n "$second_images" ]]
+          first_image_root="$(find /tmp/mailwisp-repro-first -type d -path '*/images' -print -quit)"
+          second_image_root="$(find /tmp/mailwisp-repro-second -type d -path '*/images' -print -quit)"
+          [[ -n "$first_image_root" && -n "$second_image_root" ]]
           mkdir -p /tmp/mailwisp-repro-first-images /tmp/mailwisp-repro-second-images
-          tar -xf "$first_images" -C /tmp/mailwisp-repro-first-images
-          tar -xf "$second_images" -C /tmp/mailwisp-repro-second-images
-          (cd /tmp/mailwisp-repro-first-images && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/first-image-files.sha256"
-          (cd /tmp/mailwisp-repro-second-images && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/second-image-files.sha256"
+          summarize_image_archives() {
+            local archive_root="$1" output="$2" extract_root="$3" label="$4"
+            local archive name destination metadata count=0
+            : > "$output"
+            while IFS= read -r -d '' archive; do
+              name="$(basename "$archive")"
+              destination="$extract_root/${name%.tar}"
+              mkdir -p "$destination"
+              tar -xf "$archive" -C "$destination"
+              printf '%s  %s\n' "$(sha256sum "$archive" | cut -d ' ' -f1)" "$name" >> "$output"
+              (cd "$destination" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) |
+                sed "s#  \\./#  $name/#" >> "$output"
+              for metadata in index.json manifest.json repositories; do
+                if [[ -f "$destination/$metadata" ]]; then
+                  cp "$destination/$metadata" "$GITHUB_WORKSPACE/$diagnostic/$label-$name-$metadata"
+                fi
+              done
+              count=$((count + 1))
+            done < <(find "$archive_root" -maxdepth 1 -type f -name 'mailwisp-*-linux-amd64.tar' -print0 | LC_ALL=C sort -z)
+            [[ "$count" -eq 4 ]]
+          }
+          summarize_image_archives "$first_image_root" "$GITHUB_WORKSPACE/$diagnostic/first-image-files.sha256" /tmp/mailwisp-repro-first-images first
+          summarize_image_archives "$second_image_root" "$GITHUB_WORKSPACE/$diagnostic/second-image-files.sha256" /tmp/mailwisp-repro-second-images second
           diff -u "$diagnostic/first-image-files.sha256" "$diagnostic/second-image-files.sha256" > "$diagnostic/image-digest-diff.txt" || true
           exit 1
 

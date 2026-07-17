@@ -77,7 +77,13 @@ docker compose logs --tail=100 app postfix edge
 从正式Release Bundle部署时，必须先在Bundle根目录验证Checksum并加载随包镜像，再复制`.env.example`：
 
 ```bash
-docker load --input images/mailwisp-images-linux-amd64.tar
+for image in \
+  images/mailwisp-app-linux-amd64.tar \
+  images/mailwisp-edge-linux-amd64.tar \
+  images/mailwisp-maintenance-linux-amd64.tar \
+  images/mailwisp-postfix-linux-amd64.tar; do
+  docker load --input "$image"
+done
 cd deploy/compose
 cp .env.example .env
 docker compose config --quiet

@@ -14,7 +14,7 @@
 ## 决策
 
 - Source Checkout继续以`compose.yaml`提供本地/CI Build，这是开发与自构建路径。
-- Release Bundle携带`linux/amd64`的App、Maintenance、Edge与Postfix镜像Archive，以及Host-native辅助二进制与静态Web资源。
+- Release Bundle携带`linux/amd64`的App、Maintenance、Edge与Postfix四份独立确定性镜像Archive，以及Host-native辅助二进制与静态Web资源；禁止再经Docker Engine的非确定性多镜像`docker save`重打包。
 - `release.compose.yaml`与`backup-verifier.release.compose.yaml`使用Compose 5.2.0支持的`!reset null`移除全部`build`，并为所有MailWisp镜像设置`pull_policy: never`；本地镜像缺失时必须Fail Closed，不能从Registry拉取同名Tag。
 - Go二进制和四个镜像写入Version、完整Git Commit与UTC Source Date；镜像同时写入OCI Version、Revision与Created Label。
 - Canonical Release只在固定Ubuntu 24.04 Runner从干净Checkout构建。Docker Buildx 0.35.0由官方Binary SHA-256校验安装；每次构建创建独立的BuildKit 0.31.2 Digest Builder并禁用Cache。每个镜像先以Docker Exporter的`rewrite-timestamp=true`和Git Commit Epoch重写Layer Timestamp，再从确定性Image Archive加载；外层使用规范化Tar Metadata与`gzip -n`，同一Job执行两次从零构建并以`cmp`证明Archive逐字节一致。

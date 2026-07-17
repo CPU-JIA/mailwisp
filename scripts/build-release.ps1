@@ -223,8 +223,18 @@ try {
         edge = "mailwisp/edge:$Version"
         postfix = "mailwisp/postfix:$Version"
     }
-    $imageExportRoot = Assert-MailWispArtifactPath -RepositoryRoot $repositoryRoot -Path (Join-Path $artifactRoot 'image-exports')
-    [System.IO.Directory]::CreateDirectory($imageExportRoot) | Out-Null
+    $imageArchiveNames = [ordered]@{
+        app = 'mailwisp-app-linux-amd64.tar'
+        maintenance = 'mailwisp-maintenance-linux-amd64.tar'
+        edge = 'mailwisp-edge-linux-amd64.tar'
+        postfix = 'mailwisp-postfix-linux-amd64.tar'
+    }
+    $bundleImageArchives = [ordered]@{}
+    $buildImageArchives = [ordered]@{}
+    foreach ($name in $imageArchiveNames.Keys) {
+        $bundleImageArchives[$name] = "images/$($imageArchiveNames[$name])"
+        $buildImageArchives[$name] = "$bundleName/images/$($imageArchiveNames[$name])"
+    }
     $releaseBuilderName = 'mailwisp-release-' + [guid]::NewGuid().ToString('N').Substring(0, 16)
     Invoke-Native -Name 'isolated release builder creation' -Command {
         docker buildx create --name $releaseBuilderName --driver docker-container --driver-opt "image=$buildKitImage" | Out-Null
@@ -244,7 +254,7 @@ try {
         '--build-arg', "SOURCE_DATE_EPOCH=$sourceDateEpoch"
     )
     foreach ($target in @('app', 'maintenance', 'edge')) {
-        $targetImageArchive = Join-Path $imageExportRoot "$target.tar"
+        $targetImageArchive = Join-Path $imageRoot $imageArchiveNames[$target]
         $dockerArguments = @('buildx', 'build') + $commonBuildArguments + @(
             '--output', "type=docker,dest=$targetImageArchive,rewrite-timestamp=true",
             '--target', $target,
@@ -254,9 +264,8 @@ try {
         )
         Invoke-Native -Name "$target release image build" -Command { docker @dockerArguments }
         Invoke-Native -Name "$target reproducible image load" -Command { docker load --input $targetImageArchive | Out-Null }
-        Remove-Item -LiteralPath $targetImageArchive -Force
     }
-    $postfixImageArchive = Join-Path $imageExportRoot 'postfix.tar'
+    $postfixImageArchive = Join-Path $imageRoot $imageArchiveNames.postfix
     $postfixArguments = @('buildx', 'build') + $commonBuildArguments + @(
         '--output', "type=docker,dest=$postfixImageArchive,rewrite-timestamp=true",
         '--tag', $imageReferences.postfix,
@@ -265,7 +274,6 @@ try {
     )
     Invoke-Native -Name 'postfix release image build' -Command { docker @postfixArguments }
     Invoke-Native -Name 'postfix reproducible image load' -Command { docker load --input $postfixImageArchive | Out-Null }
-    Remove-MailWispArtifactDirectory -RepositoryRoot $repositoryRoot -Path $imageExportRoot
 
     $images = [ordered]@{}
     foreach ($name in $imageReferences.Keys) {
@@ -284,13 +292,8 @@ try {
         $images[$name] = [ordered]@{ reference = $reference; id = $inspection.Id; platform = 'linux/amd64' }
     }
 
-    $imageArchive = Join-Path $imageRoot 'mailwisp-images-linux-amd64.tar'
-    Invoke-Native -Name 'release image archive' -Command {
-        docker save --output $imageArchive @($imageReferences.Values)
-    }
-
     $releaseManifest = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         product = 'MailWisp'
         version = $Version
         git_commit = $Commit
@@ -304,6 +307,7 @@ try {
         docker_buildkit_image = $buildKitImage
         build_cache = 'disabled-isolated-builder'
         image_timestamp_rewrite = $true
+        image_archives = $bundleImageArchives
         images = $images
     }
     $releaseManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $bundleRoot 'release.json') -Encoding utf8NoBOM
@@ -327,7 +331,7 @@ try {
     }
 
     [ordered]@{
-        schema_version = 1
+        schema_version = 2
         product = 'MailWisp'
         version = $Version
         git_commit = $Commit
@@ -337,7 +341,7 @@ try {
         bundle_name = $bundleName
         bundle_directory = $bundleName
         archive = [System.IO.Path]::GetFileName($archive)
-        image_archive = "$bundleName/images/mailwisp-images-linux-amd64.tar"
+        image_archives = $buildImageArchives
         docker_engine_version = $dockerEngineVersion
         docker_compose_version = $composeVersion
         docker_buildx_version = $expectedBuildxVersion

@@ -20,7 +20,13 @@ sha256sum --check SHA256SUMS
 Bundle已经携带App、Maintenance、Edge与Postfix镜像。Release Overlay会删除全部源码`build`定义，并将这些镜像的`pull_policy`设为`never`：缺失本地镜像时直接失败，禁止从Registry拉取同名Tag，也防止运行时产物与已审查Commit不一致。
 
 ```bash
-docker load --input images/mailwisp-images-linux-amd64.tar
+for image in \
+  images/mailwisp-app-linux-amd64.tar \
+  images/mailwisp-edge-linux-amd64.tar \
+  images/mailwisp-maintenance-linux-amd64.tar \
+  images/mailwisp-postfix-linux-amd64.tar; do
+  docker load --input "$image"
+done
 cd deploy/compose
 cp .env.example .env
 cp mailwisp.env.example mailwisp.env
