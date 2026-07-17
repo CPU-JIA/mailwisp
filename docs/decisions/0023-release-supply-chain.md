@@ -1,6 +1,6 @@
 # ADR 0023：预构建Compose Bundle与Fail-closed Release供应链
 
-状态：已实现，等待GitHub Linux门禁证据
+状态：已实现并通过GitHub Linux Candidate门禁
 日期：2026-07-17
 
 ## 背景
@@ -33,6 +33,8 @@
 - 只有Build Output通过固定四镜像白名单、Image ID、Tag、平台、版本和工具链Schema验证后，才允许删除本地Release Tag镜像；从Archive重新加载后核对Image ID与OCI Label。
 - 合并后的Release Compose必须渲染零`build`且所有MailWisp服务为`pull_policy: never`，并使用加载后的镜像重新完成HTTPS/SMTP/Postfix/LMTP/Parser/Browser Production E2E。
 - SBOM必须为SPDX 2.3且每份至少描述一个Package；安全证据必须报告零HIGH/CRITICAL阻断项。
+
+2026-07-17的PR #39 Candidate Run `29574327466`在Ubuntu 24.04上完成两次隔离无缓存构建并通过逐字节比较。下载后的Artifact包含18个扁平文件与17个外层Checksum Subject；Bundle包含42个内层Checksum Subject、4份确定性镜像Archive、6份SPDX文档和5份Trivy报告，阻断项为0，预构建Compose Production E2E通过。Candidate Archive SHA-256为`637f14b06f08c870aa84044f8fa0ec9b59cef6d4a21036c1b869178a523421fa`。
 
 ## 后果
 
