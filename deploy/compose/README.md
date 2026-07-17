@@ -63,6 +63,8 @@ docker compose --profile tools run --rm --service-ports certbot \
 
 ## 3. 构建与启动
 
+从Git Checkout部署时使用Canonical Source Build：
+
 ```bash
 docker compose build --pull app maintenance edge postfix
 docker compose up -d
@@ -71,6 +73,24 @@ docker compose logs --tail=100 app postfix edge
 ```
 
 `migrate`是一次性服务；`app`只有在Migration成功后启动，Edge和Postfix只有在App Readiness通过后启动。默认不运行Redis、PgBouncer、消息队列或生产Node.js。
+
+从正式Release Bundle部署时，必须先在Bundle根目录验证Checksum并加载随包镜像，再复制`.env.example`：
+
+```bash
+for image in \
+  images/mailwisp-app-linux-amd64.tar \
+  images/mailwisp-edge-linux-amd64.tar \
+  images/mailwisp-maintenance-linux-amd64.tar \
+  images/mailwisp-postfix-linux-amd64.tar; do
+  docker load --input "$image"
+done
+cd deploy/compose
+cp .env.example .env
+docker compose config --quiet
+docker compose up -d --no-build
+```
+
+Release Bundle的`.env.example`通过`COMPOSE_FILE=compose.yaml:release.compose.yaml`启用预构建Overlay；该Overlay用`!reset null`删除`migrate`、`app`、`maintenance`、`edge`与`postfix`的全部`build`，并设置`pull_policy: never`。因此Release运行路径不能因源码缺失或Registry波动回退到未审查构建或拉取同名远程Tag；本地镜像缺失必须直接失败。Source Checkout不得复制这条`COMPOSE_FILE`设置，两种路径不能混用。完整步骤见[Release Bundle说明](../../docs/release-bundle.md)。
 
 Docker Hub链路较慢时，应在Host Docker daemon配置可信`registry-mirrors`或组织级Pull-through Cache。MailWisp仍使用官方镜像名和锁定Digest，不在Compose中硬编码地域Mirror，也不接受只保留Tag、无法证明与原Digest一致的重打包镜像。Mirror只改变传输路径，不改变镜像身份。
 

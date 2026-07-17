@@ -1,0 +1,354 @@
+name: Release Supply Chain
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  candidate:
+    name: Verified Linux amd64 release candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      GOTOOLCHAIN: go1.26.5
+    outputs:
+      artifact-name: ${{ steps.identity.outputs.artifact-name }}
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            spikes/frontend/package-lock.json
+
+      - name: Install pinned Docker Compose
+        shell: bash
+        run: ./scripts/install-compose-linux.sh
+
+      - name: Install pinned Docker Buildx
+        shell: bash
+        run: ./scripts/install-buildx-linux.sh
+
+      - name: Install pinned PostgreSQL 18.4 client
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            --output /tmp/postgresql.asc
+          fingerprint="$(gpg --show-keys --with-colons /tmp/postgresql.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$fingerprint" = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+          sudo install -d -m 0755 /etc/apt/keyrings
+          gpg --dearmor < /tmp/postgresql.asc | sudo tee /etc/apt/keyrings/postgresql.gpg > /dev/null
+          echo 'deb [signed-by=/etc/apt/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' \
+            | sudo tee /etc/apt/sources.list.d/postgresql.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client-18=18.4-1.pgdg24.04+1
+          echo '/usr/lib/postgresql/18/bin' >> "$GITHUB_PATH"
+
+      - name: Install pinned verification tools
+        shell: bash
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          npm install --global npm@11.15.0
+
+      - name: Install Playwright browser dependencies
+        working-directory: spikes/frontend
+        shell: bash
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Install pinned Syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.48.0
+
+      - name: Install pinned Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.72.0
+          cache: false
+
+      - name: Resolve and validate build identity
+        id: identity
+        shell: bash
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain=v1)"
+          test "$(git rev-parse HEAD)" = "$SHA"
+          if [[ "$REF" == refs/tags/* ]]; then
+            tag="${REF#refs/tags/}"
+            [[ "$tag" =~ ^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$ ]]
+            version="${BASH_REMATCH[1]}"
+            git merge-base --is-ancestor "$SHA" origin/main
+            test -f "docs/releases/$tag.md"
+          else
+            version="0.0.0-ci.${RUN_ID}.${RUN_ATTEMPT}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=mailwisp-release-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Run clean-checkout release verification gate
+        shell: pwsh
+        run: ./scripts/verify.ps1
+
+      - name: Build first canonical release
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: ./scripts/build-release.ps1 -Version $env:VERSION -Commit $env:COMMIT
+
+      - name: Preserve first archive digest
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          cp "artifacts/release/mailwisp-${VERSION}-linux-amd64.tar.gz" /tmp/mailwisp-first.tar.gz
+          sha256sum /tmp/mailwisp-first.tar.gz
+
+      - name: Build second canonical release
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: ./scripts/build-release.ps1 -Version $env:VERSION -Commit $env:COMMIT
+
+      - name: Prove byte-for-byte reproducibility
+        id: reproducibility
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          first=/tmp/mailwisp-first.tar.gz
+          second="artifacts/release/mailwisp-${VERSION}-linux-amd64.tar.gz"
+          if cmp --silent "$first" "$second"; then
+            sha256sum "$first" "$second"
+            exit 0
+          fi
+
+          diagnostic=artifacts/reproducibility-diagnostics
+          mkdir -p "$diagnostic" /tmp/mailwisp-repro-first /tmp/mailwisp-repro-second
+          sha256sum "$first" "$second" > "$diagnostic/archive-sha256.txt"
+          (cmp --verbose "$first" "$second" | head -n 200 || true) > "$diagnostic/archive-byte-differences.txt"
+          tar -tvzf "$first" > "$diagnostic/first-archive-list.txt"
+          tar -tvzf "$second" > "$diagnostic/second-archive-list.txt"
+          tar -xzf "$first" -C /tmp/mailwisp-repro-first
+          tar -xzf "$second" -C /tmp/mailwisp-repro-second
+          (cd /tmp/mailwisp-repro-first && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/first-files.sha256"
+          (cd /tmp/mailwisp-repro-second && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) > "$GITHUB_WORKSPACE/$diagnostic/second-files.sha256"
+          diff -u "$diagnostic/first-files.sha256" "$diagnostic/second-files.sha256" > "$diagnostic/file-digest-diff.txt" || true
+
+          first_image_root="$(find /tmp/mailwisp-repro-first -type d -path '*/images' -print -quit)"
+          second_image_root="$(find /tmp/mailwisp-repro-second -type d -path '*/images' -print -quit)"
+          [[ -n "$first_image_root" && -n "$second_image_root" ]]
+          mkdir -p /tmp/mailwisp-repro-first-images /tmp/mailwisp-repro-second-images
+          summarize_image_archives() {
+            local archive_root="$1" output="$2" extract_root="$3" label="$4"
+            local archive name destination metadata count=0
+            : > "$output"
+            while IFS= read -r -d '' archive; do
+              name="$(basename "$archive")"
+              destination="$extract_root/${name%.tar}"
+              mkdir -p "$destination"
+              tar -xf "$archive" -C "$destination"
+              printf '%s  %s\n' "$(sha256sum "$archive" | cut -d ' ' -f1)" "$name" >> "$output"
+              (cd "$destination" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) |
+                sed "s#  \\./#  $name/#" >> "$output"
+              for metadata in index.json manifest.json repositories; do
+                if [[ -f "$destination/$metadata" ]]; then
+                  cp "$destination/$metadata" "$GITHUB_WORKSPACE/$diagnostic/$label-$name-$metadata"
+                fi
+              done
+              count=$((count + 1))
+            done < <(find "$archive_root" -maxdepth 1 -type f -name 'mailwisp-*-linux-amd64.tar' -print0 | LC_ALL=C sort -z)
+            [[ "$count" -eq 4 ]]
+          }
+          summarize_image_archives "$first_image_root" "$GITHUB_WORKSPACE/$diagnostic/first-image-files.sha256" /tmp/mailwisp-repro-first-images first
+          summarize_image_archives "$second_image_root" "$GITHUB_WORKSPACE/$diagnostic/second-image-files.sha256" /tmp/mailwisp-repro-second-images second
+          diff -u "$diagnostic/first-image-files.sha256" "$diagnostic/second-image-files.sha256" > "$diagnostic/image-digest-diff.txt" || true
+          exit 1
+
+      - name: Upload reproducibility failure evidence
+        if: failure() && steps.reproducibility.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-reproducibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/reproducibility-diagnostics
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Generate SPDX release SBOMs
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: ./scripts/generate-release-sbom.ps1 -Version $env:VERSION -SyftCommand $env:SYFT
+
+      - name: Scan final images and deployment configuration
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: ./scripts/scan-release.ps1 -Version $env:VERSION
+
+      - name: Finalize external checksums and release evidence
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: ./scripts/finalize-release.ps1 -Version $env:VERSION
+
+      - name: Verify extracted prebuilt release with Production E2E
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: ./scripts/verify-release.ps1 -Version $env:VERSION -RunE2E
+
+      - name: Bind runtime verification evidence into release checksums
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: ./scripts/finalize-release.ps1 -Version $env:VERSION
+
+      - name: Verify final external checksums
+        shell: bash
+        working-directory: artifacts/release/publish
+        run: sha256sum --check --strict SHA256SUMS
+
+      - name: Upload release candidate and evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.identity.outputs.artifact-name }}
+          path: artifacts/release/publish
+          if-no-files-found: error
+          retention-days: 30
+
+  release-policy:
+    name: Signed release policy
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require an available private attestation backend
+        if: github.event.repository.private && vars.MAILWISP_GITHUB_ATTESTATIONS_ENABLED != 'true'
+        shell: bash
+        run: |
+          echo 'Private releases require GitHub Enterprise Cloud Artifact Attestations.' >&2
+          echo 'MailWisp fails closed instead of publishing an unattested artifact or leaking the repository to public Rekor.' >&2
+          exit 1
+
+  attest:
+    name: GitHub build provenance
+    if: startsWith(github.ref, 'refs/tags/') && (!github.event.repository.private || vars.MAILWISP_GITHUB_ATTESTATIONS_ENABLED == 'true')
+    needs: [candidate, release-policy]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download verified release candidate
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: ${{ needs.candidate.outputs.artifact-name }}
+          path: artifacts/release/publish
+
+      - name: Recalculate every downloaded release checksum
+        shell: bash
+        working-directory: artifacts/release/publish
+        run: sha256sum --check --strict SHA256SUMS
+
+      - name: Attest all checksummed release subjects
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-checksums: artifacts/release/publish/SHA256SUMS
+
+      - name: Attest the checksum manifest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: artifacts/release/publish/SHA256SUMS
+
+  draft-release:
+    name: Create attested draft release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [candidate, release-policy, attest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download attested release candidate
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: ${{ needs.candidate.outputs.artifact-name }}
+          path: artifacts/release/publish
+
+      - name: Create or update draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.candidate.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="docs/releases/${TAG}.md"
+          test -f "$notes"
+          (cd artifacts/release/publish && sha256sum --check --strict SHA256SUMS)
+          mapfile -t assets < <(find artifacts/release/publish -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+          test "${#assets[@]}" -ge 8
+          subject_count="$(wc -l < artifacts/release/publish/SHA256SUMS)"
+          test "${#assets[@]}" -eq "$((subject_count + 1))"
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' > /tmp/is-draft 2>/dev/null; then
+            test "$(cat /tmp/is-draft)" = true
+            gh release edit "$TAG" --draft --title "MailWisp $TAG" --notes-file "$notes"
+            mapfile -t old_assets < <(gh release view "$TAG" --json assets --jq '.assets[].name')
+            for asset in "${old_assets[@]}"; do
+              gh release delete-asset "$TAG" "$asset" --yes
+            done
+            gh release upload "$TAG" --clobber "${assets[@]}"
+          else
+            gh release create "$TAG" --verify-tag --draft --title "MailWisp $TAG" --notes-file "$notes" "${assets[@]}"
+          fi

@@ -20,9 +20,9 @@ Reference Profile面向个人服务器，组件数量必须克制；同时不能
 - Alpine packaging commit `2d8b64ef1eec4e46a8799e4c5970363a4a8eb40f`；
 - Alpine `3.24.0` Linux/amd64 image manifest `sha256:33154315cf4402e697f065e6ec2156e292187e633908ccfede9c66279b6fa956`。
 
-版本证据来自Postfix官方`3.11.5`公告、官方Download Mirrors和Alpine v3.24 APKINDEX。Postfix源码签名Key尚未完成独立获取验证，因此不得描述为“源码签名已验证”；当前信任链是固定Official Alpine Image Digest、Alpine签名Package Index、精确Package Version和运行时版本断言。
+版本证据来自Postfix官方`3.11.5`公告、官方Download Mirrors和Alpine v3.24 Package。Postfix源码签名Key尚未完成独立获取验证，因此不得描述为“源码签名已验证”。Integration测试仍使用固定Official Alpine Image Digest、签名Package Index、精确Package Version和运行时断言；Canonical Release的生产Postfix进一步固定Alpine 3.24.1 Digest及全部新增APK的版本、URL与逐文件SHA-256，并在无Repository/Network解析的模式下安装。
 
-`deploy/postfix-test`只用于Integration，不直接作为生产配置。生产Postfix配置必须在域名、TLS、反滥用、DNS和运维边界确定后另行验收。
+`deploy/postfix-test`只用于Integration，不直接作为生产配置。`deploy/compose/postfix`是Canonical生产入口，已覆盖TLS、持久Queue、Relay限制、网络隔离和Production E2E；真实域名、DNS、ACME、公网25端口与外部SMTP信誉仍必须在目标基础设施单独验收。
 
 ## 投递语义
 

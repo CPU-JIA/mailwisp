@@ -1,0 +1,4 @@
+services:
+  backup-verifier:
+    build: !reset null
+    pull_policy: never

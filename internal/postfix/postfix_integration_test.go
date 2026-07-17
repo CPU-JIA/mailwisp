@@ -96,7 +96,7 @@ func testQueueSurvivesRestart(t *testing.T, postfix *postfixFixture, lmtpPort in
 	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
 	defer service.stop(t)
 	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
-	flushQueue(t, postfix.container)
+	retryQueueID(t, postfix.container, queueID)
 
 	attempt := receiver.next(t)
 	assertAttempt(t, attempt, testEnvelopeSender, raw)
@@ -117,7 +117,7 @@ func testTemporaryFailureRetries(t *testing.T, postfix *postfixFixture, lmtpPort
 	waitForContainerLog(t, postfix.container, queueID, "status=deferred")
 	waitForQueueID(t, postfix.container, queueID, true)
 
-	flushQueue(t, postfix.container)
+	retryQueueID(t, postfix.container, queueID)
 	second := receiver.next(t)
 	assertAttempt(t, second, testEnvelopeSender, raw)
 	if !bytes.Equal(first.raw, second.raw) {
@@ -142,7 +142,7 @@ func testStoragePressureRetries(t *testing.T, postfix *postfixFixture, lmtpPort 
 	waitForContainerLog(t, postfix.container, queueID, "452 4.3.1", "status=deferred")
 	waitForQueueID(t, postfix.container, queueID, true)
 
-	flushQueue(t, postfix.container)
+	retryQueueID(t, postfix.container, queueID)
 	attempt := receiver.next(t)
 	assertAttempt(t, attempt, testEnvelopeSender, raw)
 	waitForQueueID(t, postfix.container, queueID, false)
@@ -170,7 +170,7 @@ func testLostAcknowledgementDuplicates(t *testing.T, postfix *postfixFixture, lm
 	waitForContainerLog(t, postfix.container, queueID, "status=deferred")
 	waitForQueueID(t, postfix.container, queueID, true)
 
-	flushQueue(t, postfix.container)
+	retryQueueID(t, postfix.container, queueID)
 	second := repository.next(t)
 	waitForQueueID(t, postfix.container, queueID, false)
 
@@ -314,11 +314,14 @@ func assertPostfixVersion(t *testing.T, container testcontainers.Container) {
 	execOutput(t, ctx, container, "apk", "info", "--exists", postfixPackageSpec)
 }
 
-func flushQueue(t *testing.T, container testcontainers.Container) {
+func retryQueueID(t *testing.T, container testcontainers.Container, queueID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	execOutput(t, ctx, container, "postqueue", "-f")
+	// A global asynchronous flush can return while destination backoff still
+	// delays this message. Target the known deferred queue entry so the test
+	// observes LMTP retry semantics instead of unrelated queue scheduler timing.
+	execOutput(t, ctx, container, "postqueue", "-i", queueID)
 }
 
 func waitForQueueID(t *testing.T, container testcontainers.Container, queueID string, present bool) {

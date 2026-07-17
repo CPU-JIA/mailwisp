@@ -27,7 +27,9 @@
 | PgBouncer | 1.25.2 | 默认不进入Reference链路，多副本或连接压力出现后再评估 | https://www.pgbouncer.org/changelog.html |
 | Redis | 8.8.0 | 限流、短期Cache与临时协调候选，不保存唯一持久数据 | https://github.com/redis/redis/releases/tag/8.8.0 |
 | Postfix | 3.11.5 | 公网SMTP与持久重试首选，不自研公网SMTP | https://www.postfix.org/announcements/postfix-3.11.5.html |
-| Nginx Stable | 1.30.3 | Host Reverse Proxy候选，固定Stable Patch | https://nginx.org/en/download.html |
+| Nginx Stable | 1.30.4 | Host Reverse Proxy候选，固定Stable Patch；2026-07-17为消除Final Edge Image中已有修复的HIGH CVE升级 | https://nginx.org/en/download.html |
+| Docker Buildx | 0.35.0 | Release Client固定版本与官方Linux Binary SHA-256，不使用Runner默认插件 | https://github.com/docker/buildx/releases/tag/v0.35.0 |
+| BuildKit | 0.31.2 | Release Builder固定OCI Index Digest；每次构建使用全新隔离Builder、禁用Cache，并以Commit Epoch重写Layer Timestamp | https://github.com/moby/buildkit/releases/tag/v0.31.2 |
 | Caddy | 2.11.4 | 从零部署时的自动TLS备选，需与Nginx做运维对比 | https://github.com/caddyserver/caddy/releases/tag/v2.11.4 |
 | Vite | 8.1.4 | 前端Build候选，不在生产运行Node.js | https://registry.npmjs.org/vite/latest |
 | Vue | 3.5.39 | 前端Framework优先候选，仍需React/Svelte/原生方案矩阵 | https://github.com/vuejs/core/releases |

@@ -1,0 +1,16 @@
+services:
+  migrate:
+    build: !reset null
+    pull_policy: never
+  app:
+    build: !reset null
+    pull_policy: never
+  maintenance:
+    build: !reset null
+    pull_policy: never
+  edge:
+    build: !reset null
+    pull_policy: never
+  postfix:
+    build: !reset null
+    pull_policy: never
