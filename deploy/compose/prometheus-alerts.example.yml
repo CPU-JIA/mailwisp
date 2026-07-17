@@ -1,0 +1,45 @@
+groups:
+  - name: mailwisp-application
+    rules:
+      - alert: MailWispHTTP5xxBurst
+        expr: sum(increase(mailwisp_http_requests_total{status=~"5.."}[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: MailWisp is returning repeated HTTP 5xx responses
+      - alert: MailWispLMTPTemporaryFailures
+        expr: sum(increase(mailwisp_lmtp_deliveries_total{result="temporary_failure"}[10m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: MailWisp LMTP temporary failures are sustained
+      - alert: MailWispStorageAdmissionErrors
+        expr: sum(increase(mailwisp_lmtp_storage_rejections_total{reason="check_error"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: MailWisp cannot evaluate Content Store capacity
+      - alert: MailWispParserFailures
+        expr: sum(increase(mailwisp_parser_runs_total{result=~"failed|error"}[15m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: MailWisp MIME parser produced terminal or internal failures
+      - alert: MailWispRetentionFailures
+        expr: sum(increase(mailwisp_retention_sweeps_total{result="error"}[15m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: MailWisp retention cleanup is failing
+      - alert: MailWispPostgreSQLPoolSaturation
+        expr: mailwisp_postgres_pool_max_connections > 0 and (mailwisp_postgres_pool_acquired / mailwisp_postgres_pool_max_connections) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: MailWisp PostgreSQL pool remains above 90 percent utilization

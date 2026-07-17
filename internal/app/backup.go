@@ -82,8 +82,28 @@ func CreateBackup(ctx context.Context, cfg config.Config, logger *slog.Logger, d
 	return manifest, nil
 }
 
+// VerifyBackup independently verifies one published backup bundle without
+// mutating PostgreSQL or the content store.
+func VerifyBackup(ctx context.Context, logger *slog.Logger, bundleRoot string) (backuppkg.Manifest, error) {
+	if logger == nil {
+		return backuppkg.Manifest{}, errors.New("logger is required")
+	}
+	verified, err := backuppkg.Verify(ctx, bundleRoot)
+	if err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("verify backup bundle: %w", err)
+	}
+	logger.Info("backup bundle verified",
+		"bundle", bundleRoot,
+		"created_at", verified.Manifest.CreatedAt,
+		"database_bytes", verified.Manifest.Database.SizeBytes,
+		"content_objects", verified.Manifest.Content.Objects,
+		"content_bytes", verified.Manifest.Content.UncompressedBytes,
+	)
+	return verified.Manifest, nil
+}
+
 // RestoreBackup restores one verified bundle into an empty PostgreSQL database
-// and a content root that does not yet exist.
+// and a content root that is absent or an existing empty mount point.
 func RestoreBackup(ctx context.Context, cfg config.Config, logger *slog.Logger, bundleRoot string) (manifest backuppkg.Manifest, returnError error) {
 	if logger == nil {
 		return backuppkg.Manifest{}, errors.New("logger is required")

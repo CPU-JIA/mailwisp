@@ -63,7 +63,7 @@ Copy-Item -Path (Join-Path $repositoryRoot 'web/dist/*') -Destination $webRoot -
 foreach ($entry in @('README.md', 'versions.lock', 'certbot', 'nginx', 'postfix', 'systemd')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "deploy/reference/$entry") -Destination $hostDeployRoot -Recurse -Force
 }
-foreach ($entry in @('README.md', 'versions.lock', 'Dockerfile', 'compose.yaml', '.env.example', 'mailwisp.env.example', 'nginx', 'postfix')) {
+foreach ($entry in @('README.md', 'OPERATIONS.md', 'prometheus-alerts.example.yml', 'versions.lock', 'Dockerfile', 'compose.yaml', 'backup-verifier.compose.yaml', '.env.example', 'mailwisp.env.example', 'nginx', 'postfix')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "deploy/compose/$entry") -Destination $composeDeployRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $composeDeployRoot 'secrets') | Out-Null

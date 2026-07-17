@@ -14,7 +14,9 @@
     "lint": "oxlint src",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:production": "playwright test --config playwright.production.config.ts"
+    "test:e2e:production": "playwright test --config playwright.production.config.ts",
+    "test:e2e:dr:seed": "playwright test --config playwright.disaster-recovery.config.ts seed.spec.ts",
+    "test:e2e:dr:verify": "playwright test --config playwright.disaster-recovery.config.ts verify.spec.ts"
   },
   "dependencies": {
     "dompurify": "3.4.12",

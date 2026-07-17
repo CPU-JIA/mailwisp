@@ -1,11 +1,14 @@
 package telemetry
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestMetricsExposeBoundedApplicationSignals(t *testing.T) {
@@ -39,5 +42,27 @@ func TestMetricsExposeBoundedApplicationSignals(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Errorf("metrics output missing %q", expected)
 		}
+	}
+}
+
+func TestMetricsExposePostgresPoolCapacity(t *testing.T) {
+	config, err := pgxpool.ParseConfig("postgres://mailwisp:test@127.0.0.1:5432/mailwisp?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 17
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	recorder := httptest.NewRecorder()
+	NewMetrics(pool).Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("metrics status = %d", recorder.Code)
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "mailwisp_postgres_pool_max_connections 17") {
+		t.Fatalf("metrics output missing PostgreSQL pool maximum: %s", body)
 	}
 }

@@ -90,6 +90,37 @@ func TestRestoreArchiveRejectsCorruptionAndRemovesTarget(t *testing.T) {
 	}
 }
 
+func TestRestoreArchiveRejectsCorruptionAndPreservesEmptyMountPoint(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "source"), Options{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := store.Put(context.Background(), bytes.NewReader([]byte("immutable"))); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	var archive bytes.Buffer
+	stats, err := store.WriteArchive(context.Background(), &archive)
+	if err != nil {
+		t.Fatalf("WriteArchive() error = %v", err)
+	}
+	corrupt := append([]byte(nil), archive.Bytes()...)
+	corrupt[len(corrupt)/2] ^= 0xff
+	target := filepath.Join(t.TempDir(), "mounted-content")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreArchive(context.Background(), target, bytes.NewReader(corrupt), stats); err == nil {
+		t.Fatal("RestoreArchive(corrupt existing root) error = nil")
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatalf("ReadDir(existing restore root) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("existing restore root contains %d partial entries", len(entries))
+	}
+}
+
 func TestRestoreArchiveRejectsTrailingData(t *testing.T) {
 	t.Parallel()
 

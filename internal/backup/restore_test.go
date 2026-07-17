@@ -42,6 +42,49 @@ func TestRestoreBundleToIndependentEmptyTargets(t *testing.T) {
 	}
 }
 
+func TestRestoreBundleIntoExistingEmptyContentRoot(t *testing.T) {
+	bundleRoot, refs := createRestorableBundle(t)
+	contentRoot := filepath.Join(t.TempDir(), "mounted-content")
+	if err := os.Mkdir(contentRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeRestoreDatabase{empty: true, metadata: testDatabaseMetadata()}
+	if _, err := Restore(context.Background(), bundleRoot, contentRoot, database); err != nil {
+		t.Fatalf("Restore(existing empty root) error = %v", err)
+	}
+	store, err := contentstore.Open(contentRoot, contentstore.Options{MaxBytes: 1})
+	if err != nil {
+		t.Fatalf("contentstore.Open(restored) error = %v", err)
+	}
+	for _, ref := range refs {
+		if err := store.Verify(context.Background(), ref); err != nil {
+			t.Fatalf("Verify(restored %q) error = %v", ref.Key, err)
+		}
+	}
+}
+
+func TestRestoreRejectsNonEmptyContentRootBeforeDatabaseMutation(t *testing.T) {
+	bundleRoot, _ := createRestorableBundle(t)
+	contentRoot := filepath.Join(t.TempDir(), "content")
+	if err := os.Mkdir(contentRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "existing"), []byte("do not overwrite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeRestoreDatabase{empty: true, metadata: testDatabaseMetadata()}
+	if _, err := Restore(context.Background(), bundleRoot, contentRoot, database); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("Restore(non-empty content root) error = %v, want not-empty error", err)
+	}
+	if database.restoreCalls != 0 {
+		t.Fatalf("database restore calls = %d, want 0", database.restoreCalls)
+	}
+	content, err := os.ReadFile(filepath.Join(contentRoot, "existing"))
+	if err != nil || string(content) != "do not overwrite" {
+		t.Fatalf("existing content changed: content=%q error=%v", content, err)
+	}
+}
+
 func TestRestoreRejectsNonEmptyDatabaseBeforeContentMutation(t *testing.T) {
 	bundleRoot, _ := createRestorableBundle(t)
 	contentRoot := filepath.Join(t.TempDir(), "content")
@@ -69,6 +112,30 @@ func TestRestoreDatabaseFailurePreservesInstalledContent(t *testing.T) {
 	}
 	if !database.empty {
 		t.Fatal("failed single-transaction restore changed fake database")
+	}
+}
+
+func TestRestoreDatabaseFailurePreservesInstalledContentInExistingEmptyRoot(t *testing.T) {
+	bundleRoot, refs := createRestorableBundle(t)
+	contentRoot := filepath.Join(t.TempDir(), "mounted-content")
+	if err := os.Mkdir(contentRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeRestoreDatabase{empty: true, metadata: testDatabaseMetadata(), restoreErr: errors.New("restore failed")}
+	if _, err := Restore(context.Background(), bundleRoot, contentRoot, database); err == nil {
+		t.Fatal("Restore(database failure into existing empty root) error = nil")
+	}
+	if !database.empty {
+		t.Fatal("failed single-transaction restore changed fake database")
+	}
+	store, err := contentstore.Open(contentRoot, contentstore.Options{MaxBytes: 1})
+	if err != nil {
+		t.Fatalf("contentstore.Open(installed) error = %v", err)
+	}
+	for _, ref := range refs {
+		if err := store.Verify(context.Background(), ref); err != nil {
+			t.Fatalf("Verify(installed %q) error = %v", ref.Key, err)
+		}
 	}
 }
 

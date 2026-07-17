@@ -91,9 +91,11 @@ func (s *Store) WriteArchive(ctx context.Context, destination io.Writer) (Archiv
 	return summary, nil
 }
 
-// RestoreArchive extracts a content archive into a new root and verifies every
-// object against its canonical SHA-256 path. The target must not exist.
-func RestoreArchive(ctx context.Context, targetRoot string, source io.Reader, expected ArchiveStats) (ArchiveStats, error) {
+// RestoreArchive extracts a content archive into a new or existing empty root
+// and verifies every object against its canonical SHA-256 path. Supporting an
+// existing empty directory allows a named volume to be mounted directly at the
+// content root without changing the on-volume layout.
+func RestoreArchive(ctx context.Context, targetRoot string, source io.Reader, expected ArchiveStats) (summary ArchiveStats, returnError error) {
 	if strings.TrimSpace(targetRoot) == "" {
 		return ArchiveStats{}, errors.New("content restore root is required")
 	}
@@ -107,18 +109,42 @@ func RestoreArchive(ctx context.Context, targetRoot string, source io.Reader, ex
 	if err != nil {
 		return ArchiveStats{}, fmt.Errorf("resolve content restore root: %w", err)
 	}
-	if _, err := os.Lstat(absoluteRoot); err == nil {
-		return ArchiveStats{}, errors.New("content restore root already exists")
+	rootExisted := false
+	if info, err := os.Lstat(absoluteRoot); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return ArchiveStats{}, errors.New("content restore root is not a directory")
+		}
+		entries, err := os.ReadDir(absoluteRoot)
+		if err != nil {
+			return ArchiveStats{}, fmt.Errorf("inspect content restore root entries: %w", err)
+		}
+		if len(entries) != 0 {
+			return ArchiveStats{}, errors.New("content restore root is not empty")
+		}
+		rootExisted = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ArchiveStats{}, fmt.Errorf("inspect content restore root: %w", err)
 	}
-	if err := os.Mkdir(absoluteRoot, 0o700); err != nil {
-		return ArchiveStats{}, fmt.Errorf("create content restore root: %w", err)
+	if !rootExisted {
+		if err := os.Mkdir(absoluteRoot, 0o700); err != nil {
+			return ArchiveStats{}, fmt.Errorf("create content restore root: %w", err)
+		}
+	}
+	if err := secureDirectory(absoluteRoot); err != nil {
+		return ArchiveStats{}, fmt.Errorf("secure content restore root: %w", err)
 	}
 	complete := false
 	defer func() {
 		if !complete {
-			_ = os.RemoveAll(absoluteRoot)
+			var cleanupErr error
+			if rootExisted {
+				cleanupErr = removeDirectoryContents(absoluteRoot)
+			} else {
+				cleanupErr = os.RemoveAll(absoluteRoot)
+			}
+			if cleanupErr != nil {
+				returnError = errors.Join(returnError, fmt.Errorf("clean incomplete content restore: %w", cleanupErr))
+			}
 		}
 	}()
 	root, err := os.OpenRoot(absoluteRoot)
@@ -135,7 +161,7 @@ func RestoreArchive(ctx context.Context, targetRoot string, source io.Reader, ex
 	gzipReader.Multistream(false)
 	defer gzipReader.Close()
 	tarReader := tar.NewReader(gzipReader)
-	summary := ArchiveStats{}
+	summary = ArchiveStats{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return summary, err
@@ -206,6 +232,18 @@ func RestoreArchive(ctx context.Context, targetRoot string, source io.Reader, ex
 	}
 	complete = true
 	return summary, nil
+}
+
+func removeDirectoryContents(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	var cleanupErr error
+	for _, entry := range entries {
+		cleanupErr = errors.Join(cleanupErr, os.RemoveAll(filepath.Join(root, entry.Name())))
+	}
+	return cleanupErr
 }
 
 func archiveEntryReference(name string) (string, string, error) {

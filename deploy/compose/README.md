@@ -64,7 +64,7 @@ docker compose --profile tools run --rm --service-ports certbot \
 ## 3. 构建与启动
 
 ```bash
-docker compose build --pull
+docker compose build --pull app maintenance edge postfix
 docker compose up -d
 docker compose ps
 docker compose logs --tail=100 app postfix edge
@@ -99,21 +99,27 @@ docker compose exec postfix postfix reload
 
 ## 5. 备份与恢复
 
-创建一致性备份前停止收件入口与App：
+先按[Compose运维Runbook](OPERATIONS.md)在维护窗口前构建并记录镜像，临时阻断Host/云防火墙的`25/tcp`；停止Postfix后必须从同一Queue Volume再检查一次，随后才停止App并创建一致性备份：
 
 ```bash
-docker compose stop edge postfix app
-docker compose run --rm app backup /backups/mailwisp-$(date +%Y%m%d-%H%M%S)
-docker compose up -d
+docker compose exec postfix postqueue -p
+docker compose stop edge postfix
+docker compose run --rm --no-deps --entrypoint postqueue postfix -p
+docker compose stop app
+docker compose run --rm --no-deps maintenance backup /backups/mailwisp-$(date +%Y%m%d-%H%M%S)
+docker compose -f backup-verifier.compose.yaml run --rm --no-deps backup-verifier \
+  backup verify /backups/<bundle-directory>
 ```
+
+完成后按Runbook恢复服务、显式重新放行`25/tcp`并执行外部SMTP验证。
 
 恢复必须使用新的空PostgreSQL卷与空Content卷，并先在隔离环境演练：
 
 ```bash
-docker compose run --rm app restore /backups/<bundle-directory>
+docker compose run --rm --no-deps maintenance restore /backups/<bundle-directory>
 ```
 
-不得在已有数据卷上直接覆盖恢复。
+Maintenance固定使用PostgreSQL 18.4官方Client且以UID 65532运行；常驻App不包含数据库工具，也不挂载Backup目录。独立Verifier Compose不解析生产域名、数据库配置或Secret，只把Backup目录只读挂载并禁用网络。不得在已有数据卷上直接覆盖恢复，生产切换、升级回滚、Queue与离机备份边界见[Compose运维Runbook](OPERATIONS.md)。
 
 ## 6. 上线验收
 
@@ -151,3 +157,13 @@ npm --prefix web exec playwright install chromium
 ```
 
 脚本使用正式App、Edge与Postfix镜像，通过临时自签证书和Loopback随机端口验证HTTPS Session、SMTP→LMTP→Parser、Sandbox HTML、附件和删除闭环。测试证书与Secret不会写入仓库，结束时删除本次容器、Network与Volume；失败证据位于`artifacts/production-e2e/`。该测试不替代公网DNS、MX、ACME或外部SMTP验收。
+
+## 9. 灾备恢复演练
+
+安装前端固定依赖与Chromium后，在非生产环境运行：
+
+```powershell
+./scripts/drill-compose-recovery.ps1
+```
+
+演练会在随机隔离Project中真实删除原PostgreSQL与Content Volume，从独立External Backup Volume恢复，并验证原Browser Session/附件与恢复后新邮件投递。安全机器结果位于`artifacts/disaster-recovery/result.json`；Dump、Raw MIME、Cookie、Capability和测试地址不会进入Artifact。脚本绝不能指向生产Project。
