@@ -173,10 +173,11 @@ $outerCount = 0
 $innerCount = 0
 $renderedServices = 0
 $e2ePassed = $false
+$disasterRecoveryPassed = $false
 $managedEnvironment = @(
-    'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
+    'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE', 'MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
     'MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE', 'MAILWISP_WEB_DOMAIN', 'MAILWISP_SMTP_HOST',
-    'MAILWISP_MAIL_DOMAIN', 'MAILWISP_CERT_NAME', 'MAILWISP_IMAGE_TAG'
+    'MAILWISP_PUBLIC_DOMAINS', 'MAILWISP_LMTP_MAX_MESSAGE_BYTES', 'MAILWISP_CERT_NAME', 'MAILWISP_IMAGE_TAG'
 )
 $originalEnvironment = @{}
 foreach ($name in $managedEnvironment) { $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -286,16 +287,22 @@ try {
     $fixtureRoot = Join-Path $verificationRoot 'compose-fixture'
     [System.IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
     $mailwispEnvironment = Join-Path $fixtureRoot 'mailwisp.env'
-    $secret = Join-Path $fixtureRoot 'secret.txt'
+    $ownerSecret = Join-Path $fixtureRoot 'owner-secret.txt'
+    $appSecret = Join-Path $fixtureRoot 'app-secret.txt'
+    $sharedSecret = Join-Path $fixtureRoot 'shared-secret.txt'
     [System.IO.File]::WriteAllText($mailwispEnvironment, "MAILWISP_PUBLIC_DOMAINS=example.com`nMAILWISP_LMTP_HOSTNAME=mx.example.com`n")
-    [System.IO.File]::WriteAllText($secret, "release-verification-placeholder`n")
+    [System.IO.File]::WriteAllText($ownerSecret, "release-owner-verification-placeholder`n")
+    [System.IO.File]::WriteAllText($appSecret, "release-app-verification-placeholder`n")
+    [System.IO.File]::WriteAllText($sharedSecret, "release-shared-verification-placeholder`n")
     $env:MAILWISP_ENV_FILE = $mailwispEnvironment
-    $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $secret
-    $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $secret
-    $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $secret
+    $env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE = $ownerSecret
+    $env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE = $appSecret
+    $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $sharedSecret
+    $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $sharedSecret
     $env:MAILWISP_WEB_DOMAIN = 'mail.example.com'
     $env:MAILWISP_SMTP_HOST = 'mx.example.com'
-    $env:MAILWISP_MAIL_DOMAIN = 'example.com'
+    $env:MAILWISP_PUBLIC_DOMAINS = 'example.com'
+    $env:MAILWISP_LMTP_MAX_MESSAGE_BYTES = '26214400'
     $env:MAILWISP_CERT_NAME = 'mail.example.com'
     $env:MAILWISP_IMAGE_TAG = $Version
     $composeBase = Join-Path $bundleRoot 'deploy/compose/compose.yaml'
@@ -309,7 +316,7 @@ try {
         if ($rendered.services.$service.pull_policy -ne 'never') { throw "Release Compose did not disable remote pulls for $service." }
         if ($rendered.services.$service.image -notmatch ":$([regex]::Escape($Version))$") { throw "Release Compose did not pin $service to version $Version." }
     }
-    if ($renderedServices -lt 7) { throw 'Release Compose rendered an incomplete service set.' }
+    if ($renderedServices -lt 8) { throw 'Release Compose rendered an incomplete service set.' }
 
     if ($RunE2E) {
         $stage = 'prebuilt release production E2E'
@@ -318,10 +325,27 @@ try {
             -ImageTag $Version `
             -OutputDirectory 'artifacts/release-e2e' `
             -SkipBuild
-        if ($LASTEXITCODE -ne 0) { throw 'Prebuilt release Production E2E failed.' }
         $e2eResult = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'artifacts/release-e2e/result.json') | ConvertFrom-Json -DateKind String
         if ($e2eResult.status -ne 'passed') { throw 'Prebuilt release Production E2E did not report passed.' }
         $e2ePassed = $true
+
+        $stage = 'prebuilt release disaster recovery'
+        & (Join-Path $repositoryRoot 'scripts/drill-compose-recovery.ps1') `
+            -ComposeFiles @($composeBase, $composeRelease) `
+            -VerifierComposeFiles @(
+                (Join-Path $bundleRoot 'deploy/compose/backup-verifier.compose.yaml'),
+                (Join-Path $bundleRoot 'deploy/compose/backup-verifier.release.compose.yaml')
+            ) `
+            -ImageTag $Version `
+            -OutputDirectory 'artifacts/release-dr' `
+            -SkipBuild
+        $disasterRecoveryResult = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'artifacts/release-dr/result.json') | ConvertFrom-Json -DateKind String
+        if ($disasterRecoveryResult.status -ne 'passed' -or $disasterRecoveryResult.checks.database_snapshot_match -ne $true -or
+            $disasterRecoveryResult.checks.content_catalog_and_digest_match -ne $true -or
+            $disasterRecoveryResult.checks.cleanup_resources_remaining -ne 0) {
+            throw 'Prebuilt release disaster recovery did not report the complete passing contract.'
+        }
+        $disasterRecoveryPassed = $true
     }
 } catch {
     $failure = $_
@@ -346,6 +370,7 @@ if ($null -eq $failure) {
             compose_services = $renderedServices
             source_builds_remaining = 0
             production_e2e = if ($RunE2E) { $e2ePassed } else { $null }
+            disaster_recovery = if ($RunE2E) { $disasterRecoveryPassed } else { $null }
         }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resultPath -Encoding utf8NoBOM
     Write-Output $resultPath

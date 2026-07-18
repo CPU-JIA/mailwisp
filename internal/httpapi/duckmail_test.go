@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -26,11 +27,27 @@ func TestDuckMailContractAccountTokenAndDomains(t *testing.T) {
 		t.Fatalf("read DuckMail contract fixture: %v", err)
 	}
 	var fixture struct {
-		Source    string   `json:"source"`
-		Namespace string   `json:"mailwisp_namespace"`
-		Endpoints []string `json:"endpoints"`
+		Source         string   `json:"source"`
+		SourceCommit   string   `json:"source_commit"`
+		SourceSHA      string   `json:"source_sha256"`
+		BaseURL        string   `json:"upstream_base_url"`
+		Namespace      string   `json:"mailwisp_namespace"`
+		Authentication string   `json:"authentication"`
+		PageSize       int      `json:"page_size"`
+		ErrorFields    []string `json:"error_fields"`
+		Endpoints      []string `json:"endpoints"`
 	}
-	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil || fixture.Source == "" || fixture.Namespace != "/compat/duckmail" || len(fixture.Endpoints) != 10 {
+	expectedEndpoints := []string{
+		"GET /domains", "POST /accounts", "POST /token", "GET /me", "DELETE /accounts/{id}",
+		"GET /messages", "GET /messages/{id}", "PATCH /messages/{id}", "DELETE /messages/{id}", "GET /sources/{id}",
+	}
+	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil ||
+		fixture.Source != "https://raw.githubusercontent.com/MoonWeSif/DuckMail/4ae0094001b958eaf170249f1081cc60b2ca30e4/public/llm-api-docs.txt" ||
+		fixture.SourceCommit != "4ae0094001b958eaf170249f1081cc60b2ca30e4" ||
+		fixture.SourceSHA != "07c133c3ea85e5be5d887ebb015125360e4b984bed9bc4c44593153a0fe6d333" ||
+		fixture.BaseURL != "https://api.duckmail.sbs" || fixture.Namespace != "/compat/duckmail" ||
+		fixture.Authentication != "bearer_token_or_private_domain_api_key" || fixture.PageSize != 30 ||
+		!reflect.DeepEqual(fixture.ErrorFields, []string{"error", "message"}) || !reflect.DeepEqual(fixture.Endpoints, expectedEndpoints) {
 		t.Fatalf("DuckMail fixture = %+v, error = %v", fixture, err)
 	}
 	repository := &duckHTTPRepositoryStub{}

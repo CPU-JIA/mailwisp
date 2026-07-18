@@ -13,7 +13,7 @@ cd mailwisp-<version>-linux-amd64
 sha256sum --check SHA256SUMS
 ```
 
-正式Tag Release还必须同时验证Release Subject和`SHA256SUMS`自身的GitHub Artifact Attestation。私有仓库只有在GitHub Enterprise Cloud启用Artifact Attestations后才允许发布；流水线在不具备该能力时Fail Closed，不会静默发布无Attestation的Release。
+正式Tag Release还必须同时验证Release Subject和`SHA256SUMS`自身的GitHub Artifact Attestation。MailWisp当前Public仓库直接使用GitHub Artifact Attestations；若未来改为Private，只有在GitHub Enterprise Cloud启用Artifact Attestations后才允许发布。流水线在不具备该能力时Fail Closed，不会静默发布无Attestation的Release。
 
 ## Canonical Docker Compose部署
 
@@ -31,22 +31,30 @@ cd deploy/compose
 cp .env.example .env
 cp mailwisp.env.example mailwisp.env
 install -d -m 0700 secrets backups
-openssl rand -base64 32 > secrets/postgres_password.txt
+openssl rand -base64 32 > secrets/postgres_owner_password.txt
+openssl rand -base64 32 > secrets/postgres_app_password.txt
 openssl rand -base64 32 > secrets/browser_session_key.txt
 openssl rand -base64 32 > secrets/create_quota_hmac_key.txt
-chmod 0600 secrets/*.txt
+chmod 0444 secrets/*.txt
 sudo chown -R 65532:65532 backups
 ```
+
+`secrets/`父目录必须保持`0700`。文件使用`0444`是为了让Compose只读Bind Mount可被Non-root容器读取；每个Service仍只挂载其明确需要的Secret。一次性Non-root `db-provision`使用Owner与Runtime密码幂等创建或收敛最小权限Role并补齐已有对象权限，`migrate`和Maintenance只使用Owner，常驻App只使用Runtime Role。
 
 编辑`.env`和`mailwisp.env`中的示例域名后执行：
 
 ```bash
+sh preflight.sh
 docker compose config --quiet
 docker compose up -d --no-build
 docker compose ps
 ```
 
+启动顺序固定为`postgres → db-provision → migrate → app`。因此同一Bundle既支持空数据卷，也支持MailWisp自身已有数据卷的升级；Role创建和已有表授权不依赖PostgreSQL只执行一次的初始化目录。
+
 Bundle中的`.env.example`已经固定当前Release Tag，并通过`COMPOSE_FILE=compose.yaml:release.compose.yaml`自动启用预构建Overlay。不要删除该行，也不要在Release目录执行`docker compose build`。
+
+Preflight要求Linux amd64 Docker Engine与`versions.lock`中的精确Docker Compose版本；版本不一致必须先安装锁定版本，不能以配置渲染成功代替工具链身份验证。
 
 独立验证备份时使用对应Verifier Overlay：
 

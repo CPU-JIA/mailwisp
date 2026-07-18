@@ -73,10 +73,27 @@ export class MailWispClient {
     return this.#request<MessageDetail>(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}`, this.#authenticated(token, signal))
   }
 
+  downloadSource(token: string, messageID: string, signal?: AbortSignal): Promise<Blob> {
+    return this.#download(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}/source`, token, signal)
+  }
+
   async downloadAttachment(token: string, messageID: string, partPath: string, signal?: AbortSignal): Promise<Blob> {
+    return this.#download(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(partPath)}`, token, signal)
+  }
+
+  async markMessageSeen(token: string, messageID: string, signal?: AbortSignal): Promise<void> {
+    await this.#request<void>(`/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}`, {
+      ...this.#authenticated(token, signal),
+      method: 'PATCH',
+      headers: { ...this.#headers(token), ...this.#csrfHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ seen: true }),
+    })
+  }
+
+  async #download(path: string, token: string, signal?: AbortSignal): Promise<Blob> {
     let response: Response
     try {
-      response = await fetch(`${this.#baseURL}/api/v1/inboxes/me/messages/${encodeURIComponent(messageID)}/attachments/${encodeURIComponent(partPath)}`, {
+      response = await fetch(this.#baseURL + path, {
         ...this.#authenticated(token, signal),
         credentials: 'same-origin',
       })
@@ -96,6 +113,7 @@ export class MailWispClient {
       ...this.#authenticated(token, signal),
       method: 'DELETE',
       headers: { ...this.#headers(token), ...this.#csrfHeaders(token) },
+      signal,
     })
   }
 
@@ -105,6 +123,7 @@ export class MailWispClient {
       method: 'DELETE',
       headers: { ...this.#headers(token), ...this.#csrfHeaders(token) },
     })
+    if (!token) this.#csrfToken = ''
   }
 
   #authenticated(token: string, signal?: AbortSignal): RequestInit {

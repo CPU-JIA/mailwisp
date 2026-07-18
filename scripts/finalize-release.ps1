@@ -47,27 +47,38 @@ if ($security.vulnerability_database.schema_version -lt 1 -or [string]::IsNullOr
     throw 'Release security evidence does not identify the Trivy vulnerability database.'
 }
 
-$verificationEvidence = [ordered]@{ release_bundle = 'pending'; production_e2e = 'pending' }
+$verificationEvidence = [ordered]@{ release_bundle = 'pending'; production_e2e = 'pending'; disaster_recovery = 'pending' }
 $evidenceDirectory = Join-Path $artifactRoot 'evidence'
 $releaseVerificationSource = Join-Path $repositoryRoot 'artifacts/release-verification/result.json'
 $productionE2ESource = Join-Path $repositoryRoot 'artifacts/release-e2e/result.json'
-if ((Test-Path -LiteralPath $releaseVerificationSource -PathType Leaf) -or (Test-Path -LiteralPath $productionE2ESource -PathType Leaf)) {
-    if (-not (Test-Path -LiteralPath $releaseVerificationSource -PathType Leaf) -or -not (Test-Path -LiteralPath $productionE2ESource -PathType Leaf)) {
+$disasterRecoverySource = Join-Path $repositoryRoot 'artifacts/release-dr/result.json'
+if ((Test-Path -LiteralPath $releaseVerificationSource -PathType Leaf) -or
+    (Test-Path -LiteralPath $productionE2ESource -PathType Leaf) -or
+    (Test-Path -LiteralPath $disasterRecoverySource -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $releaseVerificationSource -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $productionE2ESource -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $disasterRecoverySource -PathType Leaf)) {
         throw 'Release verification evidence is incomplete.'
     }
     $releaseVerification = Get-Content -Raw -LiteralPath $releaseVerificationSource | ConvertFrom-Json -DateKind String
     $productionE2E = Get-Content -Raw -LiteralPath $productionE2ESource | ConvertFrom-Json -DateKind String
+    $disasterRecovery = Get-Content -Raw -LiteralPath $disasterRecoverySource | ConvertFrom-Json -DateKind String
     if ($releaseVerification.status -ne 'passed' -or $releaseVerification.version -ne $Version -or $releaseVerification.git_commit -ne $build.git_commit -or
         $releaseVerification.checks.source_builds_remaining -ne 0 -or $releaseVerification.checks.production_e2e -ne $true -or
-        $productionE2E.status -ne 'passed') {
-        throw 'Release verification evidence did not prove the expected prebuilt Production E2E contract.'
+        $releaseVerification.checks.disaster_recovery -ne $true -or $productionE2E.status -ne 'passed' -or
+        $disasterRecovery.status -ne 'passed' -or $disasterRecovery.checks.database_snapshot_match -ne $true -or
+        $disasterRecovery.checks.content_catalog_and_digest_match -ne $true -or
+        $disasterRecovery.checks.cleanup_resources_remaining -ne 0) {
+        throw 'Release verification evidence did not prove the expected prebuilt E2E and disaster recovery contracts.'
     }
     Remove-MailWispArtifactDirectory -RepositoryRoot $repositoryRoot -Path $evidenceDirectory
     [System.IO.Directory]::CreateDirectory($evidenceDirectory) | Out-Null
     Copy-Item -LiteralPath $releaseVerificationSource -Destination (Join-Path $evidenceDirectory 'release-verification.json')
     Copy-Item -LiteralPath $productionE2ESource -Destination (Join-Path $evidenceDirectory 'production-e2e.json')
+    Copy-Item -LiteralPath $disasterRecoverySource -Destination (Join-Path $evidenceDirectory 'disaster-recovery.json')
     $verificationEvidence.release_bundle = 'passed'
     $verificationEvidence.production_e2e = 'passed'
+    $verificationEvidence.disaster_recovery = 'passed'
 }
 
 $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()

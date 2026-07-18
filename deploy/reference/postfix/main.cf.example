@@ -5,14 +5,23 @@ mydestination =
 inet_interfaces = all
 inet_protocols = all
 
-relay_domains = MAILWISP_MAIL_DOMAIN
-transport_maps = hash:/etc/postfix/mailwisp_transport
+relay_domains = MAILWISP_PUBLIC_DOMAINS
+relay_transport = lmtp:inet:127.0.0.1:2525
+address_verify_relay_transport = lmtp:inet:127.0.0.1:2525
+address_verify_map = lmdb:$data_directory/verify_cache
+address_verify_positive_refresh_time = 1s
+address_verify_positive_expire_time = 2s
+address_verify_negative_refresh_time = 1s
+address_verify_negative_expire_time = 2s
+address_verify_poll_delay = 1s
+address_verify_poll_count = 3
+unverified_recipient_reject_code = 550
 
 smtpd_banner = $myhostname ESMTP
 disable_vrfy_command = yes
 smtpd_helo_required = yes
 smtpd_delay_reject = yes
-smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination
+smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination, reject_unverified_recipient
 smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
 
 message_size_limit = 26214400

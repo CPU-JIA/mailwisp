@@ -1,8 +1,10 @@
 # DuckMail兼容边界
 
 状态：核心Contract已实现，附件下载为部分兼容
-上游一手来源：<https://raw.githubusercontent.com/MoonWeSif/DuckMail/main/public/llm-api-docs.txt>
-核验日期：2026-07-15
+上游一手来源：<https://raw.githubusercontent.com/MoonWeSif/DuckMail/4ae0094001b958eaf170249f1081cc60b2ca30e4/public/llm-api-docs.txt>
+核验Commit：`4ae0094001b958eaf170249f1081cc60b2ca30e4`
+核验内容SHA-256：`07c133c3ea85e5be5d887ebb015125360e4b984bed9bc4c44593153a0fe6d333`
+核验日期：2026-07-18
 
 MailWisp通过显式`/compat/duckmail`命名空间提供Adapter，默认由`MAILWISP_DUCKMAIL_ENABLED=false`关闭。兼容层不会改变Canonical API字段、Token Grammar或生命周期规则。
 

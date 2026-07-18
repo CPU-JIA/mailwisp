@@ -36,16 +36,17 @@ type Config struct {
 
 // HTTP contains public HTTP server limits and timeouts.
 type HTTP struct {
-	Addr                string
-	ReadHeaderTimeout   time.Duration
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	IdleTimeout         time.Duration
-	MaxHeaderBytes      int
-	ReadinessTimeout    time.Duration
-	CreateRatePerMinute int
-	CreateRateBurst     int
-	TrustedProxyCIDRs   []string
+	Addr                 string
+	ReadHeaderTimeout    time.Duration
+	ReadTimeout          time.Duration
+	WriteTimeout         time.Duration
+	IdleTimeout          time.Duration
+	MaxHeaderBytes       int
+	ReadinessTimeout     time.Duration
+	HeavyReadConcurrency int
+	CreateRatePerMinute  int
+	CreateRateBurst      int
+	TrustedProxyCIDRs    []string
 }
 
 // Inbox contains public anonymous Inbox lifecycle settings.
@@ -160,16 +161,17 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		HTTP: HTTP{
-			Addr:                value("HTTP_ADDR", ":8080"),
-			ReadHeaderTimeout:   duration("READ_HEADER_TIMEOUT", 5*time.Second),
-			ReadTimeout:         duration("READ_TIMEOUT", 10*time.Second),
-			WriteTimeout:        duration("WRITE_TIMEOUT", 15*time.Second),
-			IdleTimeout:         duration("IDLE_TIMEOUT", 60*time.Second),
-			MaxHeaderBytes:      integer("MAX_HEADER_BYTES", 1<<20),
-			ReadinessTimeout:    duration("READINESS_TIMEOUT", 2*time.Second),
-			CreateRatePerMinute: integer("CREATE_RATE_PER_MINUTE", 12),
-			CreateRateBurst:     integer("CREATE_RATE_BURST", 4),
-			TrustedProxyCIDRs:   commaSeparated("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"),
+			Addr:                 value("HTTP_ADDR", ":8080"),
+			ReadHeaderTimeout:    duration("READ_HEADER_TIMEOUT", 5*time.Second),
+			ReadTimeout:          duration("READ_TIMEOUT", 10*time.Second),
+			WriteTimeout:         duration("WRITE_TIMEOUT", 15*time.Second),
+			IdleTimeout:          duration("IDLE_TIMEOUT", 60*time.Second),
+			MaxHeaderBytes:       integer("MAX_HEADER_BYTES", 1<<20),
+			ReadinessTimeout:     duration("READINESS_TIMEOUT", 2*time.Second),
+			HeavyReadConcurrency: integer("HEAVY_READ_CONCURRENCY", 4),
+			CreateRatePerMinute:  integer("CREATE_RATE_PER_MINUTE", 12),
+			CreateRateBurst:      integer("CREATE_RATE_BURST", 4),
+			TrustedProxyCIDRs:    commaSeparated("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"),
 		},
 		LMTP: LMTP{
 			Addr:             value("LMTP_ADDR", "127.0.0.1:2525"),
@@ -261,6 +263,9 @@ func (c Config) Validate() error {
 	}
 	if c.HTTP.ReadinessTimeout <= 0 || c.HTTP.ReadinessTimeout > 10*time.Second {
 		errs = append(errs, errors.New("MAILWISP_READINESS_TIMEOUT must be between 1ns and 10s"))
+	}
+	if c.HTTP.HeavyReadConcurrency <= 0 || c.HTTP.HeavyReadConcurrency > 128 {
+		errs = append(errs, errors.New("MAILWISP_HEAVY_READ_CONCURRENCY must be between 1 and 128"))
 	}
 	if c.HTTP.CreateRatePerMinute <= 0 || c.HTTP.CreateRatePerMinute > 10000 {
 		errs = append(errs, errors.New("MAILWISP_CREATE_RATE_PER_MINUTE must be between 1 and 10000"))

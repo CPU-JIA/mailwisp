@@ -2,6 +2,8 @@
 
 本目录保存不可变、单调递增的SQL Migration，并通过 `embed.FS` 编译进MailWisp二进制。
 
+当前Schema版本为`8`。运行二进制在Readiness阶段要求数据库版本精确等于`migrations.LatestVersion`；版本7关闭永久Inbox空值，版本8增加可重试且带Generation的Content Deletion Queue。
+
 规则：
 
 - 已进入共享分支的Migration禁止修改，只能新增更高版本。

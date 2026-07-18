@@ -52,6 +52,9 @@ func TestServiceRejectsPermanentAndInvalidAccounts(t *testing.T) {
 	if _, err := service.CreateAccount(context.Background(), CreateAccountRequest{Address: "x@evil.test", Password: "secret"}); !errors.Is(err, ErrInvalidAccount) {
 		t.Fatalf("invalid account error = %v", err)
 	}
+	if _, err := service.CreateAccount(context.Background(), CreateAccountRequest{Address: "a..b@mailwisp.test", Password: "secret"}); !errors.Is(err, ErrInvalidAccount) {
+		t.Fatalf("double-dot local part error = %v", err)
+	}
 }
 
 type duckRepositoryStub struct{ account NewAccount }

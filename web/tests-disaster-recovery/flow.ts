@@ -30,7 +30,7 @@ export function flowStatePath(): string {
 
 export async function assertDownload(page: Page, fileName: string, expected: string): Promise<void> {
   const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: '下载' }).click()
+  await page.getByRole('button', { name: '下载', exact: true }).click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe(fileName)
   const stream = await download.createReadStream()

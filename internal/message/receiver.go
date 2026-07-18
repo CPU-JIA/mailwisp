@@ -11,7 +11,7 @@ import (
 // ContentStore durably stores immutable raw message bytes.
 type ContentStore interface {
 	CheckCapacity(context.Context) error
-	Put(context.Context, io.Reader) (ContentRef, error)
+	PutLeased(context.Context, io.Reader) (ContentRef, func(), error)
 }
 
 // DeliveryRepository atomically commits message metadata for all recipients.
@@ -73,10 +73,11 @@ func (r *Receiver) Receive(ctx context.Context, request ReceiveRequest) (Receipt
 	}
 	receivedAt := r.now().UTC()
 
-	content, err := r.contentStore.Put(ctx, request.Raw)
+	content, release, err := r.contentStore.PutLeased(ctx, request.Raw)
 	if err != nil {
 		return Receipt{}, fmt.Errorf("store raw message: %w", err)
 	}
+	defer release()
 	delivery := Delivery{
 		Content:        content,
 		EnvelopeSender: request.EnvelopeSender,

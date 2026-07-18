@@ -51,6 +51,7 @@ MAILWISP_LMTP_HOSTNAME=mx.example.com
 MAILWISP_PUBLIC_DOMAINS=example.com
 MAILWISP_INBOX_MAX_MESSAGES=500
 MAILWISP_INBOX_MAX_STORAGE_BYTES=268435456
+MAILWISP_HEAVY_READ_CONCURRENCY=4
 MAILWISP_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
 MAILWISP_CREATE_DAILY_LIMIT=100
 MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE=/etc/mailwisp/create-quota-hmac-key
@@ -98,7 +99,7 @@ sudo systemctl status mailwisp.service mailwisp-cleanup.timer
 
 ## 5. Nginx与证书
 
-将`nginx/mailwisp.conf.example`复制到Nginx配置目录并替换三个占位符。先只启用80端口ACME Location，随后签发同时覆盖Web和SMTP Host的证书：
+将`nginx/mailwisp.conf.example`复制到Nginx配置目录并替换三个占位符，同时把`nginx/mailwisp-security-headers.conf.example`安装为`/etc/nginx/snippets/mailwisp-security-headers.conf`。Location中重复Include是为了避免`Cache-Control`的`add_header`破坏安全Header继承。先只启用80端口ACME Location，随后签发同时覆盖Web和SMTP Host的证书：
 
 ```bash
 sudo certbot certonly --webroot -w /var/lib/letsencrypt \
@@ -116,16 +117,14 @@ sudo certbot renew --dry-run
 
 ## 6. Postfix
 
-合并`postfix/main.cf.example`，替换占位符；使用`master.cf.example`明确关闭公网`smtpd`的Chroot，以便读取受控证书副本。安装Transport Map：
+合并`postfix/main.cf.example`，把`MAILWISP_PUBLIC_DOMAINS`替换为与应用配置完全相同的收件域名列表；使用`master.cf.example`明确关闭公网`smtpd`的Chroot，以便读取受控证书副本。`relay_transport`和`address_verify_relay_transport`都直接指向本机LMTP，不需要生成Transport Map：
 
 ```bash
-sudo install -m 0644 postfix/mailwisp_transport.example /etc/postfix/mailwisp_transport
-sudo postmap /etc/postfix/mailwisp_transport
 sudo postfix check
 sudo systemctl reload postfix
 ```
 
-未知Recipient由Go LMTP返回永久失败；过载和暂时数据库故障返回4xx，由Postfix持久Queue重投。
+Postfix在SMTP RCPT阶段通过LMTP地址验证拒绝未知Recipient，避免接受后生成Backscatter；过载和暂时数据库故障返回4xx，由发送端或Postfix持久Queue重投。
 
 ## 7. 上线验收
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -26,11 +27,23 @@ func TestYYDSContractTemporaryInboxAndMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		SourceSHA string   `json:"source_sha256"`
-		Namespace string   `json:"mailwisp_namespace"`
-		Endpoints []string `json:"endpoints"`
+		Source         string   `json:"source"`
+		SourceVersion  string   `json:"source_version"`
+		SourceSHA      string   `json:"source_sha256"`
+		Namespace      string   `json:"mailwisp_namespace"`
+		Envelope       []string `json:"envelope"`
+		Authentication string   `json:"authentication"`
+		Endpoints      []string `json:"endpoints"`
 	}
-	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil || fixture.SourceSHA == "" || fixture.Namespace != "/compat/yyds/v1" || len(fixture.Endpoints) != 12 {
+	expectedEndpoints := []string{
+		"GET /domains", "POST /accounts", "POST /inboxes", "POST /token", "GET /accounts/me", "GET /accounts/{id}",
+		"DELETE /accounts/{id}", "GET /messages", "GET /messages/{id}", "PATCH /messages/{id}", "DELETE /messages/{id}", "GET /sources/{id}",
+	}
+	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil ||
+		fixture.Source != "https://maliapi.215.im/v1/openapi.json" || fixture.SourceVersion != "1.0.0" ||
+		fixture.SourceSHA != "12882318619f9e2e0b3055cdafa3b1993739185a39bcff87a48a1418a34647a6" ||
+		fixture.Namespace != "/compat/yyds/v1" || fixture.Authentication != "temporary_bearer" ||
+		!reflect.DeepEqual(fixture.Envelope, []string{"success", "data", "error", "errorCode"}) || !reflect.DeepEqual(fixture.Endpoints, expectedEndpoints) {
 		t.Fatalf("YYDS fixture = %+v, error = %v", fixture, err)
 	}
 	mailboxes := &yydsHTTPMailboxStub{}

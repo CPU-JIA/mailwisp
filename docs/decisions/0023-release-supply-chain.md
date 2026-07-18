@@ -9,13 +9,14 @@
 
 源码归档、预构建Registry镜像和离线镜像Bundle各有不同信任与运维成本。MailWisp的Canonical Profile面向个人单机Compose：部署者应能验证一个与Git Commit绑定的产物，加载后不再调用编译工具链，也不应因本地Tag缺失而静默回退源码Build。
 
-仓库当前为Private。GitHub Artifact Attestations对Private/Internal仓库要求GitHub Enterprise Cloud；SLSA Generic Generator虽然可用，但会把私有仓库名写入公共Rekor。未经用户明确授权，不能用公开透明日志绕过这一隐私边界。
+仓库在本ADR形成时为Private；2026-07-18经用户明确授权已改为Public。GitHub Artifact Attestations对Public仓库可直接使用，对Private/Internal仓库则要求GitHub Enterprise Cloud；SLSA Generic Generator虽然可用，但会把私有仓库名写入公共Rekor。若仓库未来恢复为Private，仍不能用公开透明日志绕过这一隐私边界。
 
 ## 决策
 
 - Source Checkout继续以`compose.yaml`提供本地/CI Build，这是开发与自构建路径。
 - Release Bundle携带`linux/amd64`的App、Maintenance、Edge与Postfix四份独立确定性镜像Archive，以及Host-native辅助二进制与静态Web资源；禁止再经Docker Engine的非确定性多镜像`docker save`重打包。
 - `release.compose.yaml`与`backup-verifier.release.compose.yaml`使用Compose 5.2.0支持的`!reset null`移除全部`build`，并为所有MailWisp镜像设置`pull_policy: never`；本地镜像缺失时必须Fail Closed，不能从Registry拉取同名Tag。
+- Bundle同时携带`db-provision`脚本；该一次性Non-root服务复用固定Digest的PostgreSQL镜像，先收敛Runtime Role与已有对象权限，再允许Migration和App启动。它不新增MailWisp应用镜像，也不依赖只在空Volume运行的初始化目录。
 - Go二进制和四个镜像写入Version、完整Git Commit与UTC Source Date；镜像同时写入OCI Version、Revision与Created Label。
 - Canonical Release只在固定Ubuntu 24.04 Runner从干净Checkout构建。Docker Buildx 0.35.0由官方Binary SHA-256校验安装；每次构建创建独立的BuildKit 0.31.2 Digest Builder并禁用Cache。每个镜像先以Docker Exporter的`rewrite-timestamp=true`和Git Commit Epoch重写Layer Timestamp，再从确定性Image Archive加载；外层使用规范化Tar Metadata与`gzip -n`，同一Job执行两次从零构建并以`cmp`证明Archive逐字节一致。
 - Maintenance与Postfix分别把PostgreSQL Client所需八个APK、Postfix所需九个APK固定到精确版本URL与逐文件SHA-256，再由`apk --no-network --repositories-file /dev/null`只安装已下载集合；安装后删除包含墙钟时间、但不属于Package Database的构建期`/var/log/apk.log`，保留真实Package Database，避免Build-time Log破坏可复现性。两者都以固定Alpine Digest为Base，Release构建不依赖浮动APKINDEX，也不继承PostgreSQL Server或`gosu`等无关攻击面。
@@ -31,7 +32,7 @@
 - 解压前验证外层Checksum、单一顶层目录、重复Entry和Tar类型，拒绝绝对路径、`..`、Symlink、Hardlink与未知类型；解压后要求内部Checksum覆盖全部Regular File。
 - Candidate Artifact、Attestation与Draft Release必须消费同一个扁平`publish/`目录；下载后的文件数必须严格等于Checksum Subject数加清单自身，避免目录折叠或旧Asset造成证据错配。
 - 只有Build Output通过固定四镜像白名单、Image ID、Tag、平台、版本和工具链Schema验证后，才允许删除本地Release Tag镜像；从Archive重新加载后核对Image ID与OCI Label。
-- 合并后的Release Compose必须渲染零`build`且所有MailWisp服务为`pull_policy: never`，并使用加载后的镜像重新完成HTTPS/SMTP/Postfix/LMTP/Parser/Browser Production E2E。
+- 合并后的Release Compose必须渲染完整八服务集合、所有MailWisp服务零`build`且`pull_policy: never`，并使用加载后的镜像重新完成Runtime Role Provision、HTTPS/SMTP/Postfix/LMTP/Parser/Browser Production E2E。
 - SBOM必须为SPDX 2.3且每份至少描述一个Package；安全证据必须报告零HIGH/CRITICAL阻断项。
 
 2026-07-17的PR #39 Candidate Run `29574327466`在Ubuntu 24.04上完成两次隔离无缓存构建并通过逐字节比较。下载后的Artifact包含18个扁平文件与17个外层Checksum Subject；Bundle包含42个内层Checksum Subject、4份确定性镜像Archive、6份SPDX文档和5份Trivy报告，阻断项为0，预构建Compose Production E2E通过。Candidate Archive SHA-256为`637f14b06f08c870aa84044f8fa0ec9b59cef6d4a21036c1b869178a523421fa`。
@@ -40,5 +41,5 @@
 
 - Release Artifact明显大于只含二进制的Archive，但个人服务器不需要在生产机安装Go、Node或下载应用Build Dependency。
 - PostgreSQL和Certbot等固定Digest第三方镜像仍由Compose拉取，可信Mirror只能改变传输路径，不能改变身份。
-- Private Free/Pro仓库不能完成正式Attested Release，这是明确的发布策略阻断，不是可被跳过的CI故障；PR与`main`仍会生成30天保留的完整Release Candidate Artifact。
+- 当前Public仓库可完成正式Attested Release。若未来改为Private Free/Pro，正式发布会被策略阻断；这不是可跳过的CI故障，PR与`main`仍只生成30天保留的完整Release Candidate Artifact。
 - 当前只交付`linux/amd64`。新增Architecture必须独立构建、SBOM、扫描、E2E与容量验证，不能只改Platform字符串。

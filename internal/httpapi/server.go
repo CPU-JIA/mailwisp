@@ -50,7 +50,9 @@ type MailboxService interface {
 	Delete(context.Context, message.InboxID) error
 	ListMessages(context.Context, message.InboxID, mailbox.CursorPage) (mailbox.CursorMessagePage, error)
 	GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error)
+	OpenSource(context.Context, message.InboxID, message.MessageID) (mailbox.RawSource, error)
 	OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error)
+	MarkMessageSeen(context.Context, message.InboxID, message.MessageID) error
 	DeleteMessage(context.Context, message.InboxID, message.MessageID) error
 }
 
@@ -77,6 +79,7 @@ type Server struct {
 	cloudflareTemp            *cloudflaretemp.Service
 	cloudflareTempLegacyPaths bool
 	cloudflareTempHeavy       chan struct{}
+	heavyReads                chan struct{}
 	metricsHandler            http.Handler
 	metrics                   HTTPMetrics
 }
@@ -86,7 +89,15 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	server := &Server{logger: logger, readinessTimeout: cfg.ReadinessTimeout, cloudflareTempHeavy: make(chan struct{}, 2)}
+	if cfg.HeavyReadConcurrency <= 0 {
+		cfg.HeavyReadConcurrency = 4
+	}
+	server := &Server{
+		logger:              logger,
+		readinessTimeout:    cfg.ReadinessTimeout,
+		cloudflareTempHeavy: make(chan struct{}, 2),
+		heavyReads:          make(chan struct{}, cfg.HeavyReadConcurrency),
+	}
 	if cfg.CreateRatePerMinute <= 0 {
 		cfg.CreateRatePerMinute = 12
 	}
@@ -112,6 +123,8 @@ func NewServer(cfg config.HTTP, logger *slog.Logger) *Server {
 	mux.HandleFunc("DELETE /api/v1/inboxes/me", server.handleDeleteInbox)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages", server.handleListMessages)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages/{id}", server.handleGetMessage)
+	mux.HandleFunc("PATCH /api/v1/inboxes/me/messages/{id}", server.handleUpdateMessage)
+	mux.HandleFunc("GET /api/v1/inboxes/me/messages/{id}/source", server.handleGetSource)
 	mux.HandleFunc("GET /api/v1/inboxes/me/messages/{id}/attachments/{part}", server.handleGetAttachment)
 	mux.HandleFunc("DELETE /api/v1/inboxes/me/messages/{id}", server.handleDeleteMessage)
 	mux.HandleFunc("GET /compat/duckmail/domains", server.handleDuckMailDomains)
@@ -297,7 +310,7 @@ func (s *Server) handleCreateInbox(w http.ResponseWriter, request *http.Request)
 	}
 	created, err := s.mailbox.Create(request.Context(), mailbox.CreateRequest{Domain: input.Domain, Lifetime: lifetime})
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"data": map[string]any{
@@ -313,7 +326,7 @@ func (s *Server) handleGetInbox(w http.ResponseWriter, request *http.Request) {
 	}
 	inbox, err := s.mailbox.Get(request.Context(), principal.InboxID)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": inbox})
@@ -326,17 +339,17 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, request *http.Reques
 	}
 	principal, err := s.authenticateBearer(request)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	session, err := s.browserSessions.Issue(request.Context(), principal)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	inbox, err := s.mailbox.Get(request.Context(), principal.InboxID)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	s.setSessionCookie(w, session)
@@ -350,12 +363,12 @@ func (s *Server) handleGetSession(w http.ResponseWriter, request *http.Request) 
 	}
 	inbox, err := s.mailbox.Get(request.Context(), principal.InboxID)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	rotated, err := s.browserSessions.Issue(request.Context(), principal)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	s.setSessionCookie(w, rotated)
@@ -376,7 +389,7 @@ func (s *Server) handleDeleteInbox(w http.ResponseWriter, request *http.Request)
 		return
 	}
 	if err := s.mailbox.Delete(request.Context(), principal.InboxID); err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	s.clearSessionCookie(w)
@@ -404,7 +417,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, request *http.Request
 	}
 	page, err := s.mailbox.ListMessages(request.Context(), principal.InboxID, mailbox.CursorPage{Limit: limit, Before: cursor})
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	nextCursor := ""
@@ -426,15 +439,80 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, request *http.Request) 
 	}
 	messageID, err := parseMessageID(request.PathValue("id"))
 	if err != nil {
-		writeMappedError(w, request, mailbox.ErrMessageNotFound)
+		writeMappedError(s.logger, w, request, mailbox.ErrMessageNotFound)
 		return
 	}
 	detail, err := s.mailbox.GetMessage(request.Context(), principal.InboxID, messageID)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": detail})
+}
+
+func (s *Server) handleUpdateMessage(w http.ResponseWriter, request *http.Request) {
+	principal, ok := s.requirePrincipal(w, request, auth.ScopeMessageUpdate)
+	if !ok {
+		return
+	}
+	messageID, err := parseMessageID(request.PathValue("id"))
+	if err != nil {
+		writeMappedError(s.logger, w, request, mailbox.ErrMessageNotFound)
+		return
+	}
+	var input struct {
+		Seen *bool `json:"seen"`
+	}
+	request.Body = http.MaxBytesReader(w, request.Body, 1024)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.Seen == nil || !*input.Seen {
+		writeError(w, request, http.StatusBadRequest, "invalid_request", "seen must be true")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, request, http.StatusBadRequest, "invalid_request", "request body must contain one JSON object")
+		return
+	}
+	if err := s.mailbox.MarkMessageSeen(request.Context(), principal.InboxID, messageID); err != nil {
+		writeMappedError(s.logger, w, request, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetSource(w http.ResponseWriter, request *http.Request) {
+	principal, ok := s.requirePrincipal(w, request, auth.ScopeMessageRead)
+	if !ok {
+		return
+	}
+	messageID, err := parseMessageID(request.PathValue("id"))
+	if err != nil {
+		writeMappedError(s.logger, w, request, mailbox.ErrMessageNotFound)
+		return
+	}
+	if !s.beginHeavyRead(w, request) {
+		return
+	}
+	defer s.endHeavyRead()
+	source, err := s.mailbox.OpenSource(request.Context(), principal.InboxID, messageID)
+	if err != nil {
+		writeMappedError(s.logger, w, request, err)
+		return
+	}
+	defer source.Reader.Close()
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", "message/rfc822")
+	if disposition := mime.FormatMediaType("attachment", map[string]string{"filename": string(messageID) + ".eml"}); disposition != "" {
+		w.Header().Set("Content-Disposition", disposition)
+	}
+	if source.Size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(source.Size, 10))
+	}
+	if _, err := io.Copy(w, source.Reader); err != nil {
+		s.logger.WarnContext(request.Context(), "Raw MIME stream failed", "request_id", requestIDFromContext(request.Context()), "error", err)
+	}
 }
 
 func (s *Server) handleGetAttachment(w http.ResponseWriter, request *http.Request) {
@@ -444,12 +522,16 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, request *http.Reques
 	}
 	messageID, err := parseMessageID(request.PathValue("id"))
 	if err != nil {
-		writeMappedError(w, request, mailbox.ErrMessageNotFound)
+		writeMappedError(s.logger, w, request, mailbox.ErrMessageNotFound)
 		return
 	}
+	if !s.beginHeavyRead(w, request) {
+		return
+	}
+	defer s.endHeavyRead()
 	source, err := s.mailbox.OpenAttachment(request.Context(), principal.InboxID, messageID, request.PathValue("part"))
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	defer source.Reader.Close()
@@ -478,15 +560,28 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, request *http.Reques
 	}
 	messageID, err := parseMessageID(request.PathValue("id"))
 	if err != nil {
-		writeMappedError(w, request, mailbox.ErrMessageNotFound)
+		writeMappedError(s.logger, w, request, mailbox.ErrMessageNotFound)
 		return
 	}
 	if err := s.mailbox.DeleteMessage(request.Context(), principal.InboxID, messageID); err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (s *Server) beginHeavyRead(w http.ResponseWriter, request *http.Request) bool {
+	select {
+	case s.heavyReads <- struct{}{}:
+		return true
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeError(w, request, http.StatusServiceUnavailable, "service_busy", "message download capacity is busy")
+		return false
+	}
+}
+
+func (s *Server) endHeavyRead() { <-s.heavyReads }
 
 func (s *Server) requirePrincipal(w http.ResponseWriter, request *http.Request, scopes ...auth.Scope) (auth.Principal, bool) {
 	if s.mailbox == nil || s.authenticator == nil {
@@ -496,7 +591,7 @@ func (s *Server) requirePrincipal(w http.ResponseWriter, request *http.Request, 
 	if strings.TrimSpace(request.Header.Get("Authorization")) != "" {
 		principal, err := s.authenticateBearer(request, scopes...)
 		if err != nil {
-			writeMappedError(w, request, err)
+			writeMappedError(s.logger, w, request, err)
 			return auth.Principal{}, false
 		}
 		return principal, true
@@ -528,7 +623,7 @@ func (s *Server) requireBrowserPrincipal(w http.ResponseWriter, request *http.Re
 	csrf := request.Header.Get("X-MailWisp-CSRF")
 	principal, err := s.browserSessions.Authenticate(request.Context(), cookie.Value, csrf, requireCSRF, scopes...)
 	if err != nil {
-		writeMappedError(w, request, err)
+		writeMappedError(s.logger, w, request, err)
 		return auth.Principal{}, false
 	}
 	return principal, true
@@ -588,7 +683,7 @@ func setCreateQuotaHeaders(w http.ResponseWriter, decision abuse.Decision, err e
 	}
 }
 
-func writeMappedError(w http.ResponseWriter, request *http.Request, err error) {
+func writeMappedError(logger *slog.Logger, w http.ResponseWriter, request *http.Request, err error) {
 	switch {
 	case errors.Is(err, auth.ErrUnauthenticated):
 		writeError(w, request, http.StatusUnauthorized, "unauthenticated", "a MailWisp capability is invalid or expired")
@@ -605,6 +700,7 @@ func writeMappedError(w http.ResponseWriter, request *http.Request, err error) {
 	case errors.Is(err, mailbox.ErrAddressConflict):
 		writeError(w, request, http.StatusServiceUnavailable, "address_unavailable", "a unique Inbox address could not be allocated")
 	default:
+		logger.ErrorContext(request.Context(), "http request failed", "request_id", requestIDFromContext(request.Context()), "error", err)
 		writeError(w, request, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
 }

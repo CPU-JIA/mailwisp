@@ -36,6 +36,13 @@ groups:
           severity: warning
         annotations:
           summary: MailWisp retention cleanup is failing
+      - alert: MailWispContentDeletionBacklog
+        expr: mailwisp_content_deletion_pending > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: MailWisp Raw MIME physical deletion backlog is not draining
       - alert: MailWispPostgreSQLPoolSaturation
         expr: mailwisp_postgres_pool_max_connections > 0 and (mailwisp_postgres_pool_acquired / mailwisp_postgres_pool_max_connections) > 0.9
         for: 10m

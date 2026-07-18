@@ -35,8 +35,8 @@ func TestCreateIssuesOwnerCapabilityAndCleansUpOnFailure(t *testing.T) {
 	}
 
 	issuer.err = errors.New("issuer unavailable")
-	if _, err := service.Create(context.Background(), CreateRequest{}); err == nil || repository.purged == "" {
-		t.Fatalf("Create(failed issuer) error = %v, purge = %q", err, repository.purged)
+	if _, err := service.Create(context.Background(), CreateRequest{}); err == nil || repository.deleted == "" {
+		t.Fatalf("Create(failed issuer) error = %v, deleted = %q", err, repository.deleted)
 	}
 }
 
@@ -54,6 +54,9 @@ func TestCreateSupportsValidatedExactLocalPart(t *testing.T) {
 	}
 	if _, err := service.Create(context.Background(), CreateRequest{LocalPart: "-invalid"}); !errors.Is(err, ErrInvalidLocalPart) {
 		t.Fatalf("Create(invalid local part) error = %v", err)
+	}
+	if _, err := service.Create(context.Background(), CreateRequest{LocalPart: "never..receives"}); !errors.Is(err, ErrInvalidLocalPart) {
+		t.Fatalf("Create(double-dot local part) error = %v", err)
 	}
 }
 
@@ -125,7 +128,7 @@ func TestListMessagesUsesStableCursorBoundary(t *testing.T) {
 
 type repositoryStub struct {
 	created     mailboxInbox
-	purged      string
+	deleted     string
 	detail      MessageDetail
 	page        Page
 	messagePage MessagePage
@@ -140,12 +143,9 @@ func (r *repositoryStub) CreateInbox(_ context.Context, candidate NewInbox) (Inb
 func (r *repositoryStub) GetInbox(context.Context, message.InboxID) (Inbox, error) {
 	return r.created, nil
 }
-func (r *repositoryStub) DeleteInbox(context.Context, message.InboxID) ([]message.ContentRef, error) {
+func (r *repositoryStub) DeleteInbox(_ context.Context, id message.InboxID) ([]message.ContentRef, error) {
+	r.deleted = string(id)
 	return nil, nil
-}
-func (r *repositoryStub) PurgeInbox(_ context.Context, id message.InboxID) error {
-	r.purged = string(id)
-	return nil
 }
 func (r *repositoryStub) ListMessages(_ context.Context, _ message.InboxID, page Page) (MessagePage, error) {
 	r.page = page
@@ -175,11 +175,10 @@ func (s *issuerStub) Issue(_ context.Context, inboxID message.InboxID, scopes au
 
 type contentStub struct{ raw string }
 
-func (*contentStub) Delete(message.ContentRef) error { return nil }
 func (s *contentStub) OpenRaw(context.Context, message.ContentRef) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader(s.raw)), nil
 }
 
 var _ Repository = (*repositoryStub)(nil)
 var _ CapabilityIssuer = (*issuerStub)(nil)
-var _ ContentDeleter = (*contentStub)(nil)
+var _ ContentReader = (*contentStub)(nil)

@@ -11,6 +11,13 @@ param(
     [ValidateRange(0, 65535)]
     [int]$SMTPPort = 0,
 
+    [string[]]$ComposeFiles,
+
+    [string[]]$VerifierComposeFiles,
+
+    [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z_.-]{0,127}$')]
+    [string]$ImageTag,
+
     [switch]$SkipBuild
 )
 
@@ -275,7 +282,7 @@ SELECT json_build_object(
 )::text;
 '@
     $raw = Invoke-NativeText -Name 'PostgreSQL recovery snapshot' -Command {
-        docker compose @ComposeArguments exec -T postgres psql --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 -U mailwisp -d mailwisp --command $query
+        docker compose @ComposeArguments exec -T postgres psql --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 -U mailwisp_owner -d mailwisp --command $query
     }
     return $raw | ConvertFrom-Json
 }
@@ -367,7 +374,7 @@ function Save-DrillDiagnostics {
     }
     foreach ($capture in @(
         @{ Name = 'compose-ps.json'; Command = { & docker compose @ComposeArguments ps -a --format json 2>&1 | Out-String } },
-        @{ Name = 'compose.log'; Command = { & docker compose @ComposeArguments logs --no-color postgres migrate app edge postfix 2>&1 | Out-String } },
+        @{ Name = 'compose.log'; Command = { & docker compose @ComposeArguments logs --no-color postgres db-provision migrate app edge postfix 2>&1 | Out-String } },
         @{ Name = 'volumes.txt'; Command = { & docker volume ls --filter "label=com.docker.compose.project=$projectName" --format '{{.Name}}' 2>&1 | Out-String } },
         @{ Name = 'manifest.json'; Command = { & docker compose @VerifierComposeArguments run --rm --no-deps --entrypoint cat backup-verifier /backups/recovery-bundle/manifest.json 2>&1 | Out-String } }
     )) {
@@ -409,19 +416,37 @@ if (-not $fixtureRoot.StartsWith($temporaryPrefix, $pathComparison)) { throw 'Di
 $projectName = 'mailwisp-drill-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 $verifierProjectName = "${projectName}-verifier"
 $backupVolume = 'mailwisp-drill-backup-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
-$baseCompose = Join-Path $repositoryRoot 'deploy/compose/compose.yaml'
+$composeFilesResolved = if ($null -eq $ComposeFiles -or $ComposeFiles.Count -eq 0) {
+    @((Join-Path $repositoryRoot 'deploy/compose/compose.yaml'))
+} else {
+    @($ComposeFiles | ForEach-Object { [System.IO.Path]::GetFullPath($_) })
+}
+$verifierComposeFilesResolved = if ($null -eq $VerifierComposeFiles -or $VerifierComposeFiles.Count -eq 0) {
+    @((Join-Path $repositoryRoot 'deploy/compose/backup-verifier.compose.yaml'))
+} else {
+    @($VerifierComposeFiles | ForEach-Object { [System.IO.Path]::GetFullPath($_) })
+}
+foreach ($candidate in @($composeFilesResolved) + @($verifierComposeFilesResolved)) {
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { throw "Disaster recovery Compose file is missing: $candidate" }
+    $repositoryPrefix = $repositoryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $candidate.StartsWith($repositoryPrefix, $pathComparison)) { throw "Disaster recovery Compose file escaped the repository: $candidate" }
+    Assert-NoReparsePoint -Root $repositoryRoot -Child $candidate
+}
 $productionOverlay = Join-Path $repositoryRoot 'deploy/compose/production-e2e.compose.yaml'
 $recoveryOverlay = Join-Path $repositoryRoot 'deploy/compose/disaster-recovery.compose.yaml'
-$verifierCompose = Join-Path $repositoryRoot 'deploy/compose/backup-verifier.compose.yaml'
 $verifierRecoveryOverlay = Join-Path $repositoryRoot 'deploy/compose/disaster-recovery-verifier.compose.yaml'
-$composeArguments = @('--profile', 'maintenance', '-p', $projectName, '-f', $baseCompose, '-f', $productionOverlay, '-f', $recoveryOverlay)
-$verifierComposeArguments = @('-p', $verifierProjectName, '-f', $verifierCompose, '-f', $verifierRecoveryOverlay)
+$composeArguments = @('--profile', 'maintenance', '-p', $projectName)
+foreach ($candidate in $composeFilesResolved) { $composeArguments += @('-f', $candidate) }
+$composeArguments += @('-f', $productionOverlay, '-f', $recoveryOverlay)
+$verifierComposeArguments = @('-p', $verifierProjectName)
+foreach ($candidate in $verifierComposeFilesResolved) { $verifierComposeArguments += @('-f', $candidate) }
+$verifierComposeArguments += @('-f', $verifierRecoveryOverlay)
 $managedEnvironment = @(
-    'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
+    'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE', 'MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
     'MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE', 'MAILWISP_WEB_DOMAIN', 'MAILWISP_SMTP_HOST',
-    'MAILWISP_MAIL_DOMAIN', 'MAILWISP_CERT_NAME', 'MAILWISP_E2E_CERT_ROOT', 'MAILWISP_E2E_HTTP_PORT',
+    'MAILWISP_PUBLIC_DOMAINS', 'MAILWISP_LMTP_MAX_MESSAGE_BYTES', 'MAILWISP_CERT_NAME', 'MAILWISP_E2E_CERT_ROOT', 'MAILWISP_E2E_HTTP_PORT',
     'MAILWISP_E2E_HTTPS_PORT', 'MAILWISP_E2E_SMTP_PORT', 'MAILWISP_DR_BACKUP_VOLUME',
-    'MAILWISP_DR_BASE_URL', 'MAILWISP_DR_SMTP_PORT', 'MAILWISP_DR_STATE_ROOT'
+    'MAILWISP_DR_BASE_URL', 'MAILWISP_DR_SMTP_PORT', 'MAILWISP_DR_STATE_ROOT', 'MAILWISP_IMAGE_TAG'
 )
 $originalEnvironment = @{}
 foreach ($name in $managedEnvironment) { $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -449,21 +474,26 @@ try {
     New-DrillCertificate -CertificateRoot $certificateRoot
     $utf8 = [System.Text.UTF8Encoding]::new($false)
     $mailwispEnvironment = Join-Path $fixtureRoot 'mailwisp.env'
-    $postgresPassword = Join-Path $fixtureRoot 'postgres_password.txt'
+    $postgresOwnerPassword = Join-Path $fixtureRoot 'postgres_owner_password.txt'
+    $postgresAppPassword = Join-Path $fixtureRoot 'postgres_app_password.txt'
     $browserSessionKey = Join-Path $fixtureRoot 'browser_session_key.txt'
     $createQuotaKey = Join-Path $fixtureRoot 'create_quota_hmac_key.txt'
     [System.IO.File]::WriteAllText($mailwispEnvironment, "MAILWISP_LOG_LEVEL=info`nMAILWISP_TRUSTED_PROXY_CIDRS=172.16.0.0/12`nMAILWISP_PUBLIC_DOMAINS=mailwisp.test`nMAILWISP_LMTP_HOSTNAME=mx.mailwisp.test`n", $utf8)
-    [System.IO.File]::WriteAllText($postgresPassword, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
+    [System.IO.File]::WriteAllText($postgresOwnerPassword, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
+    [System.IO.File]::WriteAllText($postgresAppPassword, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
     [System.IO.File]::WriteAllText($browserSessionKey, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
     [System.IO.File]::WriteAllText($createQuotaKey, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
 
     $env:MAILWISP_ENV_FILE = $mailwispEnvironment
-    $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $postgresPassword
+    if (-not $IsWindows) { Invoke-Native -Name 'chmod 0444 DR secrets' -Command { chmod 0444 $postgresOwnerPassword $postgresAppPassword $browserSessionKey $createQuotaKey } }
+    $env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE = $postgresOwnerPassword
+    $env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE = $postgresAppPassword
     $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $browserSessionKey
     $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $createQuotaKey
     $env:MAILWISP_WEB_DOMAIN = 'mailwisp.test'
     $env:MAILWISP_SMTP_HOST = 'mx.mailwisp.test'
-    $env:MAILWISP_MAIL_DOMAIN = 'mailwisp.test'
+    $env:MAILWISP_PUBLIC_DOMAINS = 'mailwisp.test'
+    $env:MAILWISP_LMTP_MAX_MESSAGE_BYTES = '26214400'
     $env:MAILWISP_CERT_NAME = 'drill'
     $env:MAILWISP_E2E_CERT_ROOT = $certificateRoot
     $env:MAILWISP_E2E_HTTP_PORT = [string]$HTTPPort
@@ -473,6 +503,7 @@ try {
     $env:MAILWISP_DR_BASE_URL = "https://127.0.0.1:$HTTPSPort"
     $env:MAILWISP_DR_SMTP_PORT = [string]$SMTPPort
     $env:MAILWISP_DR_STATE_ROOT = $stateRoot
+    if (-not [string]::IsNullOrWhiteSpace($ImageTag)) { $env:MAILWISP_IMAGE_TAG = $ImageTag }
 
     $stage = 'Docker and Compose validation'
     Invoke-Native -Name 'docker info' -Command { docker info --format '{{.ServerVersion}}' }
@@ -490,9 +521,9 @@ try {
     if (-not $SkipBuild) {
         $stage = 'production image build'
         Invoke-Native -Name 'disaster recovery production images' -Command { docker compose @composeArguments build --pull app maintenance edge postfix }
-        $stage = 'pinned PostgreSQL image pull'
-        Invoke-NativeWithRetry -Name 'disaster recovery PostgreSQL pull' -Command { docker compose @composeArguments pull postgres }
     }
+    $stage = 'pinned PostgreSQL image pull'
+    Invoke-NativeWithRetry -Name 'disaster recovery PostgreSQL pull' -Command { docker compose @composeArguments pull postgres }
 
     $stage = 'maintenance toolchain validation'
     $pgDumpVersion = Invoke-NativeText -Name 'maintenance pg_dump version' -Command {
@@ -566,7 +597,7 @@ try {
     Invoke-Native -Name 'empty PostgreSQL startup' -Command { docker compose @composeArguments up -d --no-deps postgres }
     Wait-PostgresHealthy -ComposeArguments $composeArguments
     $publicObjects = Invoke-NativeText -Name 'empty PostgreSQL inspection' -Command {
-        docker compose @composeArguments exec -T postgres psql --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 -U mailwisp -d mailwisp --command "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f');"
+        docker compose @composeArguments exec -T postgres psql --quiet --no-align --tuples-only --set ON_ERROR_STOP=1 -U mailwisp_owner -d mailwisp --command "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f');"
     }
     if ($publicObjects -ne '0') { throw "Restore PostgreSQL target is not empty: $publicObjects public objects." }
 

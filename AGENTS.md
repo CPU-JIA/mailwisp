@@ -1,326 +1,162 @@
 # MailWisp 开发与协作规范
 
-本文件适用于整个仓库，是所有开发者和自动化 Agent 必须遵守的最高级别工程约束。子目录可以通过更具体的 `AGENTS.md` 增加规则，但不得削弱、绕过或与本文件冲突。
+本文件适用于整个仓库。它只保留当前有效的工程约束；架构论证、历史候选和验收证据分别以已接受 ADR、版本锁及测试为准。
 
-## 1. 核心原则
+## 1. 产品与边界
 
-MailWisp 是面向自托管场景的生产级临时邮箱服务。单台Linux服务器是Reference Deployment Profile，不是工程质量和资源选择的硬上限。
-
-产品目标按优先级排序：
-
-1. 正确性与数据安全。
-2. 安全、清晰、可维护的长期工程质量。
-3. 完整且一致的用户体验。
-4. 可预测的低延迟。
-5. 通过有界并发与背压实现高并发。
-6. 合理而非极端的资源效率。
-7. 部署、恢复与维护简单可靠。
-
-品牌文案：
+MailWisp 是面向自托管个人服务器的生产级临时邮箱服务。
 
 > Fast mail. Zero trace.
 > 来信即现，过时即逝。
 
-不得为了适配现有服务器规格牺牲正确性、安全性、可维护性和用户体验。项目完成后通过Benchmark与容量模型给出匹配的资源建议。
+优先级依次为：正确性与数据安全、安全与可维护性、完整用户体验、低延迟、有界高并发、资源效率、部署与恢复简单可靠。
 
-## 2. 不跳过、不越权
+- 后端只使用 Go，不引入 Rust。
+- MailWisp 是独立新产品，不读取、迁移、复用或修改 `../tempmail` 及其代码、数据、配置和 Secret。
+- DuckMail、YYDS、Cloudflare Temp Email 仅是可关闭的外部 API Adapter，不构成旧产品继承关系。
+- 未明确支持的能力必须写入 Compatibility 的 Partially Supported 或 Unsupported，禁止伪装兼容。
 
-这是仓库的强制规则，没有“临时先跳过”的默认例外。
+## 2. 当前架构事实
 
-### 不跳过
-
-- 不跳过需求核对、现状检查、备份检查、迁移验证、测试、静态分析、安全扫描、恢复验证和Git审查。
-- 不得使用 `--no-verify` 绕过Git Hook。
-- 不得为了让CI变绿而删除、禁用、跳过或弱化测试。
-- 不得把失败检查描述为通过，也不得以“没有发现问题”代替覆盖充分的验证。
-- 不得在未完成数据恢复演练前声称迁移安全。
-- 不得在未完成端到端验证前声称SMTP收件链路可用。
-- 工具不可用时必须明确记录“未验证”，并继续完成所有仍可执行的检查。
-
-### 不越权
-
-- 只修改用户明确授权的仓库、分支、文件、服务和环境。
-- 默认只操作本地开发环境，不连接或修改生产服务器。
-- 未经明确授权，不部署、不重启服务、不修改DNS、不开放端口、不轮换生产密钥、不发送外部消息。
-- 未经明确授权，不创建公开仓库；新远程仓库默认使用 `private`。
-- 未经明确授权，不修改远程仓库权限、Branch Protection、Secrets、Deploy Keys或组织设置。
-- 不删除或覆盖用户已有提交、分支、标签、远程仓库和生产数据。
-- 不使用 `git reset --hard`、强制覆盖Checkout或其他破坏性命令处理用户改动。
-- 发现任务需要扩大权限或范围时，先停止相关动作并说明原因。
-
-## 3. 默认语言
-
-- 面向用户的交流、项目说明、ADR、Issue、PR描述、运维说明和普通注释默认使用中文。
-- 代码标识符、Go Doc、API字段、协议名称、标准名称、行业术语和必须保持原文的专业文案使用行业惯用英文。
-- Git提交格式使用 Conventional Commits 英文类型前缀，主题默认中文，例如：`feat: 增加LMTP会话解析器`。
-- 不对已有标准术语进行生硬翻译，例如 HTTP、LMTP、Postfix、PostgreSQL、Redis、Backpressure、Context、Middleware。
-
-## 4. 仓库边界
-
-- MailWisp是完全独立的新产品，不是旧TempMail的重构版、升级版或兼容发行版。
-- `../tempmail`及其源码、Schema、Dump、Raw Mail、配置、Secret和运行数据全部不属于本项目输入；不得读取、复制、迁移、编辑、删除、格式化或提交其中任何内容，除非用户未来重新明确授权一个独立任务。
-- 不实现旧TempMail数据迁移、API兼容、Token兼容、配置兼容或行为兼容，也不把旧实现作为架构、测试Fixture和产品需求的证据来源。
-- MailWisp只对自身已发布版本提供Migration、Backup、Restore和Rollback Contract；首次正式发布前不存在旧产品升级路径。
-- DuckMail、YYDS与Cloudflare Temp Email兼容是面向外部客户端的可选Adapter，不代表与旧TempMail存在任何继承关系。
-- 未经明确授权，不得修改任何生产服务器、生产数据、DNS或真实Secret。
-
-## 5. 候选运行架构
-
-本节是当前研究假设，不是不可修改的既定结论。正式业务实现前必须通过竞品、生产约束、基准测试、维护状态和故障模型研究重新验证。证据证明存在更优方案时，应通过ADR更新架构；收益不足的组件可以舍弃。
+Canonical Reference Profile 是单台 Linux 服务器上的模块化单体：
 
 ```text
-Host Web Edge -> 静态Vue前端 / Go HTTP API
+Nginx -> Vue 静态控制台 / Go HTTP API
 Postfix -> LMTP -> Go Application
-Go Application -> PostgreSQL
-Go Application -> Local Content Store
-Go Application -> Redis（Extended Profile按证据启用）
+Go Application -> PostgreSQL 18 + Local Content Store
 ```
 
-当前候选约束：
+- Docker Compose 是唯一主推荐部署方式；Host-native 只作辅助 Profile。
+- PostgreSQL 是结构化状态的唯一事实源；Raw MIME 存入内容寻址文件系统。
+- 一个部署只允许一个 Go `serve` 进程。PostgreSQL Advisory Lease 强制 Singleton；高并发在进程内通过有界 Admission、Worker 和 Backpressure 实现。
+- 不使用 Redis、Broker、PgBouncer、Kubernetes、Service Mesh 或内部 RPC。只有真实需求、测量和 ADR 同时成立时才能引入。
+- 公网只开放 Nginx HTTP(S) 与 Postfix SMTP；PostgreSQL、LMTP、Metrics 和内部网络不得直接暴露。
+- 架构变化必须更新 ADR、故障模型、部署、测试和恢复 Contract。
 
-- 优先评估一个Go应用二进制；如果隔离、可靠性或维护证据证明拆分更优，可以调整。
-- PostgreSQL是唯一持久化事实来源。
-- Raw MIME与大附件使用独立Content Storage语义；Reference Profile优先本地文件，Extended Profile可替换S3-compatible实现。
-- Redis不得承载恢复用户数据所必需的唯一副本。
-- Reference Profile默认不依赖Redis；只有多Replica热点限流或临时协调收益被测量证明时才启用。
-- Postfix负责公网SMTP兼容、持久队列和失败重试。
-- 默认不使用PgBouncer，只有生产测量证明需要时才重新评估。
-- 不因潮流引入Kafka、RabbitMQ、Kubernetes、Service Mesh或内部RPC层；真实需求与证据证明必要时，必须通过ADR与成本验证。
-- 后台任务在进程内运行，必须支持取消、有界并发和必要的单实例协调。
+## 3. 授权与安全
 
-## 6. 最优解必须真实可实现
+- 用户已授权本仓库内的日常研发闭环：调研、分支、实现、测试、Commit、Push、PR、Review 修复、Actions、合并和任务分支清理。
+- 该授权不包含生产部署、DNS、真实 Secret、仓库可见性、计费、权限、Branch Protection、Deploy Key 或外部消息。
+- 不使用 `git reset --hard`、Force Push、`--no-verify` 或破坏性 Checkout 覆盖他人改动。
+- 不跳过测试、扫描、迁移、恢复、Review 或失败检查；工具不可用时只能标记“未验证”。
+- 不记录或提交密码、Token、Authorization Header、DSN、完整邮件内容、生产配置或用户数据。
+- 新远程仓库默认 Private；未经授权不得改变远程治理设置。
 
-- “最优”必须针对明确约束、负载、故障模型和维护能力，不使用空泛的行业标签。
-- Architecture Diagram、Interface和Scaffold不等于实现完成。
-- 关键方案在正式采用前必须完成最小Technical Spike，证明核心路径能编译、运行、测试和部署。
-- 性能结论必须有Benchmark或等价测量；安全结论必须有Threat Model与验证；兼容结论必须有Contract Test。
-- 不引入只用于展示复杂度、没有清晰Owner或无法独立验收的抽象层。
-- 如果某功能、兼容目标或组件会显著破坏核心质量，可以明确舍弃，并记录原因与替代路径。
-- 最终方案必须能够由当前团队真正完成，而不是依赖未来可能出现的人力和重写。
+## 4. 语言与命名
 
-## 7. 标准目录
+- 用户沟通、README、ADR、PR、运维说明默认中文；协议名、代码标识符和专业术语使用惯用英文。
+- Commit 使用 Conventional Commits 英文类型前缀和中文主题，例如 `fix: 修复内容删除重试竞态`。
+- Go Package 简短、小写、单数；禁止 `utils`、`helpers`、`common`、`core`、`misc` 等垃圾桶名称。
+- 环境变量统一使用 `MAILWISP_` 前缀；数据库使用 `snake_case`；JSON 遵循所属 Contract。
+- 时间优先使用 `time.Duration`；字节和数量限制必须在名称中表达单位或语义。
+
+## 5. 目录与依赖
 
 ```text
-cmd/                 可执行程序入口，只做启动与依赖组装
-internal/app/        应用组合与生命周期
-internal/config/     类型化配置与校验
-internal/httpapi/    HTTP传输与Middleware
-internal/lmtp/       LMTP协议与有界收件入口
-internal/mail/       MIME解析与邮件领域逻辑
-internal/auth/       身份认证与权限控制
-internal/account/    账户领域
-internal/domain/     邮件域名领域
-internal/mailbox/    邮箱领域
-internal/message/    收件消息领域
-internal/contentstore/ Raw MIME与大附件Content Storage适配器
-internal/jobs/       定时维护任务
-internal/postgres/   PostgreSQL适配器
-internal/rediscache/ 可选Redis适配器
-internal/telemetry/  日志、健康检查与指标
-migrations/          不可变的版本化SQL迁移
-web/                 前端源代码与构建产物
-deploy/              容器和宿主机部署资源
-scripts/             可重复执行的开发与验证脚本
-docs/decisions/      Architecture Decision Record
+cmd/                   可执行入口与参数解析
+internal/app/          Composition Root 与生命周期
+internal/config/       类型化配置和启动校验
+internal/httpapi/      Canonical 与兼容 HTTP Transport
+internal/lmtp/         有界 LMTP 协议入口
+internal/mail/         MIME 解析
+internal/auth/         Token、Capability、Session、Scope
+internal/mailbox/      Inbox 与消息应用语义
+internal/message/      投递领域与 Raw Content 引用
+internal/contentstore/ 文件内容存储、恢复、校验
+internal/jobs/         Parser 与 Retention Job
+internal/postgres/     pgx Repository、Migration、维护租约
+internal/telemetry/    日志与低基数 Metrics
+migrations/            不可变 Goose SQL Migration
+web/                   Vue 生产控制台
+deploy/compose/        Canonical 部署与运维
+deploy/reference/      Host-native 辅助 Profile
+scripts/               可复现门禁、Release、E2E、DR、Benchmark
+docs/decisions/        已接受架构决策
 ```
 
-只有形成明确职责边界时才创建Package，禁止无意义增加目录层级。
+- 领域层不得依赖 HTTP、PostgreSQL、Docker 或前端。
+- Transport 只做认证、校验、映射和响应，不写 SQL。
+- Infrastructure 实现消费方定义的 Interface；`cmd/` 与 `internal/app/` 负责组装。
+- 只在职责和重复复杂度真实存在时增加抽象或目录。
 
-## 8. Go工程规范
+## 6. Go 规则
 
-- 使用 `go.mod` 与构建镜像中声明的同一Go版本。
-- 标准库清晰且足够时优先使用标准库。
-- HTTP路由默认使用现代 `net/http` 路由模式，只有测量证明需要时才引入Router依赖。
-- 使用 `log/slog` 输出结构化日志。
-- 所有请求级和I/O操作以 `context.Context` 作为第一个参数。
-- 不得把 `context.Context` 保存在长期存活的Struct中。
-- 禁止启动无人负责的Goroutine。
-- 每个Goroutine必须有Owner、取消路径和关闭行为。
-- 预期内的运行错误不得使用 `panic`。
-- 避免全局可变状态。
-- 除不可避免的静态注册外，不使用 `init()`。
-- Constructor必须显式且尽量不产生隐藏副作用。
-- 在消费方定义Interface；不要只为Mock制造Interface。
-- 接收Interface，能返回具体类型时返回具体类型。
-- 使用 `%w` 包装错误，并补充操作上下文。
-- 使用 `errors.Is` 和 `errors.As` 判断错误。
-- Transport需要稳定映射时使用类型化或Sentinel领域错误。
-- 注释解释设计意图和不变量，不复述语法。
-- 所有导出声明必须提供有效Go Doc。
+- 使用 `go.mod`、`.go-version` 和版本锁声明的同一 Go 版本；优先标准库。
+- I/O 和请求操作以 `context.Context` 为首参，不把 Context 存入长生命周期 Struct。
+- Goroutine 必须有 Owner、取消、错误回传与关闭路径；禁止无人负责的后台任务。
+- 预期错误不用 `panic`；使用 `%w`、`errors.Is`/`errors.As` 和稳定领域错误。
+- Constructor 显式依赖，不产生隐藏网络或持久化副作用。
+- Interface 定义在消费方，不为 Mock 制造空抽象。
+- 导出声明有有效 Go Doc；注释解释不变量，不复述语法。
+- 任何共享状态都必须证明并发语义，并通过 Race Test。
 
-## 9. 命名规范
+## 7. 数据与生命周期
 
-- Package名称必须简短、小写、单数且表达明确。
-- 禁止使用 `utils`、`helpers`、`common`、`base`、`core`、`misc`、`manager` 等垃圾桶式Package名。
-- 避免 `mailbox.MailboxServiceManager` 一类重复命名。
-- 优先使用领域动作：`CreateMailbox`、`ReceiveMessage`、`RotateToken`。
-- Boolean名称使用 `is`、`has`、`can`、`should` 或同等明确的谓词。
-- 时间使用 `time.Duration`；无法使用时名称必须包含单位。
-- 字节限制名称必须包含 `Bytes`。
-- 环境变量统一使用 `MAILWISP_` 前缀。
-- 数据库标识符使用小写 `snake_case`。
-- JSON字段为兼容API使用小写 `snake_case`。
-- HTTP路径使用复数资源名；只有普通CRUD无法表达时才增加动作子资源。
+- 使用 `pgx/v5` 和参数化 SQL，不引入 ORM。
+- Transaction 短小明确；Transaction 内不做文件、DNS 或外部网络 I/O。
+- List 必须有确定排序与有界 Pagination；Index 必须对应实际 Query Pattern。
+- 已进入共享历史的 Migration 不可修改，只能新增单调版本。
+- 运行二进制要求数据库 Schema 精确等于 `migrations.LatestVersion`。
+- 破坏性变更必须有备份恢复与前一受支持版本验证。
+- Inbox 永久到期被禁止；删除数据库引用时必须原子生成持久 Content Deletion Task。
+- 文件删除失败必须可重试；删除前在生命周期 Fence 内重新核对数据库引用，并用 Generation 防止旧确认吞掉新任务。
+- Reconcile、Backup、Restore 和一次性 Cleanup 必须取得独占维护租约。
 
-## 10. 依赖方向
+## 8. SMTP、LMTP 与 MIME
 
-- 领域Package不得依赖HTTP、PostgreSQL、Redis、Docker或前端实现。
-- Transport只负责输入输出转换，不得包含SQL。
-- Infrastructure实现应用层或领域层消费的Interface。
-- `cmd/` 与 `internal/app/` 是Composition Root，可以连接具体实现。
-- 不得向Handler传递原始数据库连接池。
-- Redis Client不得泄漏到Redis适配器之外。
-- 禁止循环依赖和共享垃圾桶Package。
+- Postfix 负责公网 SMTP、持久 Queue、TLS 和重投；Go 只接收内部 LMTP。
+- 未知 Recipient 在 SMTP RCPT 阶段拒绝，避免 Backscatter。
+- Durable Content 和全部 Recipient 元数据提交前不得确认 LMTP 成功。
+- 所有 Session、Recipient、Message Bytes、Header、MIME Depth、Part、Decoded Bytes、附件和 Parser Worker 必须有上限。
+- 过载返回临时错误让 Postfix 重试；永久业务错误使用明确 5xx。
+- Header、Body、HTML、URL、Filename 和 MIME 元数据全部视为不可信输入。
+- Raw Source 始终可按 Ownership 下载；解析失败是可检查的终态，不得伪装为持续处理中。
 
-## 11. 配置与秘密
+## 9. HTTP、认证与隐私
 
-- 配置必须类型化，只在启动时加载和校验，之后保持不可变。
-- 每项配置只有一个Canonical环境变量。
-- 必填配置缺失时以简洁错误停止启动。
-- 默认值必须适合资源有限的个人服务器。
-- Secret不得提供硬编码默认值。
-- 禁止记录密码、DSN、API Token、Redis凭据、完整Authorization Header和完整邮件内容。
-- `.env`、Secret文件和生产配置必须被Git忽略。
-- 示例配置只能包含Placeholder。
+- Canonical API 使用 `/api/v1`，统一 Error Envelope、稳定 Code 和 Request ID。
+- `/livez` 只表示进程存活；`/readyz` 用短 Deadline 验证必要依赖与精确 Schema。
+- Body、Header、Query、Pagination、下载和高成本读取都有硬上限或并发 Admission。
+- 内部错误记录根因，不返回客户端；日志不得包含 Token、Query Credential 或完整邮件。
+- Canonical Token 遵循 ADR 0005：`wisp_<type>_v1_<kid>_<secret>`，熵不少于 256 bit，明文只展示一次，数据库只保存 Domain-separated Digest。
+- Authorization 默认拒绝；每个对象检查 Inbox Ownership 和 Scope。
+- 浏览器使用 Secure、HttpOnly、SameSite `__Host-` Cookie 与内存 CSRF Proof；Session 不得写入 Local Storage。
+- Stateless Session 的撤销边界必须在安全文档中如实披露；删除 Inbox 才是全部访问权的权威失效点。
+- Metrics Label 必须低基数，不使用邮箱、Token、Message ID、Content Key 或任意用户输入。
 
-## 12. HTTP与API规范
+## 10. 前端
 
-- 在有意做出版本化兼容决策前，必须保留旧API行为。
-- 新公共API使用 `/api/v1`。
-- `/livez` 只检查进程存活。
-- `/readyz` 使用短Deadline检查必要依赖。
-- HTTP Server必须设置ReadHeader、Read、Write、Idle和Shutdown Timeout。
-- Request Body、Header、Query、Upload和Pagination必须有明确上限。
-- 错误响应使用统一JSON Envelope，包含稳定错误码和Request ID。
-- 内部错误记录上下文，但不得直接返回客户端。
-- Authentication与Authorization集中实现。
-- 所有账户资源都必须检查Object Ownership。
-- 内部接口使用独立Listener或密码学鉴权，并由公网Proxy显式拒绝。
-- 生产CORS使用Allowlist；通配符必须有明确、可审查的原因。
+- 正式前端位于 `web/`，使用固定版本 Vue、TypeScript、Vite 与 vue-i18n；生产不运行 Node.js。
+- 默认中文并支持英文；支持 System、Light、Dark 和经过完整状态验证的扩展主题。
+- Design Token、响应式布局、键盘操作、ARIA、Loading/Empty/Error/Retry 状态均为发布要求。
+- 不可信邮件 HTML 只能经 Sanitization 后进入无凭据、强 Sandbox iframe；默认阻止远程图片。
+- 不使用 `innerHTML` 注入未净化内容，不把 Capability 放入 URL、Storage 或可读 Cookie。
+- UI 调用必须覆盖 Session 恢复、退出失败、Pagination 竞态、解析失败、Raw Source、附件和删除确认。
 
-## 13. Authentication与权限
+## 11. Adapter Contract
 
-- Canonical Opaque Token必须遵循ADR 0005的`wisp_<type>_v1_<kid>_<secret>`语法；兼容Adapter不得反向污染Canonical认证模型。
-- Token使用 `crypto/rand` 生成，熵不得低于256 bit。
-- Bearer Token明文只展示一次；数据库只保存Domain-separated Digest、非秘密Kid、Type、Scope与生命周期状态。
-- 适用时使用Constant-time Comparison。
-- Scope检查默认拒绝。
-- Token Rotation必须在一个原子操作中使旧Token失效。
-- V1不得签发永久PAT或不可撤销JWT Bearer Token。
-- Webhook Signing Secret等服务端必须使用的Key Material不得套用不可逆Bearer Digest存储，必须通过独立ADR确定加密存储或主密钥派生边界。
-- 管理Secret不得出现在日志中。
-- Web Console优先使用 Secure、HttpOnly、SameSite Cookie，降低XSS窃取风险。
-- 登录、注册、域名提交和高成本查询必须限流。
+- Canonical Domain Model 不复制第三方结构；Adapter 只投影 Path、Auth、Field、Status 和 Error Envelope。
+- 每个 Adapter 必须有固定 Commit/版本或内容 SHA-256 的一手 Contract Fixture。
+- Contract Test 逐项固定来源身份、Endpoint、Envelope、Authentication、分页与安全上限，不能只检查文件存在或数组长度。
+- 版本升级必须人工审查上游 Diff，并同时更新 Fixture、测试和 Compatibility 文档。
+- 安全冲突优先保持 MailWisp 边界，例如拒绝 Query Token、永久匿名邮箱和不可撤销 JWT。
 
-## 14. PostgreSQL规范
+## 12. 配置、部署与 Release
 
-- 使用 `pgx/v5`，不引入ORM。
-- 只使用参数化SQL。
-- Transaction必须短小、显式，并限定在一个业务操作内。
-- Query必须继承调用方Context Deadline。
-- List必须有确定排序和有界Pagination。
-- Index来自实际Query Pattern，不凭猜测添加。
-- 发布后的Migration不可修改。
-- 每个Migration使用单调递增版本和清晰名称。
-- 启动Migration使用PostgreSQL Advisory Lock。
-- 破坏性Migration必须经过兼容阶段和备份恢复验证。
-- Cleanup使用有界Batch，避免长锁、WAL尖峰和表膨胀。
-- pgx Pool限制必须与服务器容量一致，并通过压测校准。
+- 配置只在启动时类型化加载和校验；一个语义只有一个 Canonical 变量。
+- Secret 无默认值，通过 Compose Secret 文件注入；示例只能使用不会命中 Secret Scanner 的 Placeholder。
+- 版本固定在 `go.mod`、Lockfile、Docker Digest、`versions.lock` 和 Action Commit SHA；禁止 `latest` 与浮动 Major。
+- Runtime 尽可能 Non-root、`no-new-privileges`、只读文件系统、最小 Capability、内部 Network 和有界日志。
+- Compose 必须先由幂等 `db-provision` 收敛 Runtime Role 及已有对象权限，再由 Owner 执行 Migration；不得依赖只在空 Volume 运行一次的 `docker-entrypoint-initdb.d` 承担升级。
+- Compose 用户部署前必须通过精确版本 Preflight、配置渲染、Migration、Healthcheck 和备份基线。
+- Release 从干净 Checkout 运行完整门禁、可复现双构建、SBOM、Trivy、Checksum 和 Production E2E。
+- 正式 Tag 必须属于 `main`、满足 SemVer、具有中文 Release Notes 和 Attestation；平台不支持时 Fail Closed，不降级发布。
 
-## 15. Redis规范
+## 13. 测试门禁
 
-- Redis只存放限流计数、短期缓存和临时协调状态。
-- Key统一使用版本化 `mailwisp:` Namespace。
-- 非永久Key必须有TTL。
-- 需要原子性的多步修改使用Lua或Transaction。
-- 每种Redis故障必须明确是Fail-open还是Fail-closed。
-- Redis故障不得破坏PostgreSQL持久状态。
-- Cache必须具有Invalidation策略或有界Staleness。
+新行为与回归测试必须在同一 Change。验证范围与风险相称，窄测不能证明全仓完成。
 
-## 16. 邮件入口规范
-
-- 公网SMTP由Postfix负责。
-- Go应用通过LMTP接收Postfix投递。
-- LMTP准入、解析和持久化使用有界Queue。
-- 过载时返回临时投递失败，让Postfix重试。
-- Durable Persistence完成前不得确认LMTP成功。
-- 限制Message Bytes、Header Bytes/Count、MIME Nesting、Part Count、Decoded Body和Attachment Size。
-- 所有Header、Body、HTML、Link和Filename均视为不可信输入。
-- 解析失败不得导致进程崩溃。
-- Raw Message必须有明确TTL和删除路径。
-- 删除Message时必须一致清理关联的外部或Raw Storage。
-
-## 17. 并发与性能
-
-- 使用有界并发，不追求无限并发。
-- 每个Queue都必须定义Capacity、Overload行为和可观测Depth。
-- 每个Worker Pool都必须说明Size和取消行为。
-- Transaction期间不得执行DNS、Redis、Filesystem或外部Network调用。
-- LMTP/MIME Hot Path避免重复Allocation与Copy。
-- 没有Benchmark或生产等价测量，不做性能结论。
-- Benchmark必须记录输入、并发、Payload和机器条件。
-- 性能改动必须通过 `go test -race`。
-- 空闲Polling使用保守Interval、必要的Jitter和Context取消。
-
-## 18. 后台任务
-
-- Job实现小而明确的Interface，并接收Context。
-- 单轮失败只记录并重试，不终止无关服务。
-- Job使用有界Batch和Deadline。
-- 必须单实例运行的Job使用PostgreSQL Advisory Lock。
-- Schedule与Business Logic分离。
-- 时间相关逻辑在有价值时通过注入Clock进行测试。
-
-## 19. 前端规范
-
-- 前端使用TypeScript与ES Module。
-- Vite只用于开发和构建，生产服务器不运行Node.js。
-- 面向用户的界面必须支持中文与英文切换，中文为默认语言。
-- i18n Message使用稳定Key，不得把显示文案当作Key。
-- 日期、时间、数字、复数和相对时间使用Locale-aware格式化。
-- 建立Design Token驱动的主题系统，颜色、字体、圆角、阴影和动效不得散落硬编码。
-- 必须提供Light、Dark与Follow System基础模式。
-- 扩展主题只在具有清晰视觉定位、完整状态覆盖、可访问对比度和维护价值时增加；不得为数量堆砌重复主题。
-- Theme与Language选择在本地持久化，并避免首屏闪烁。
-- API Client、State、View、Component与Utility分层。
-- 禁止重新形成单一巨型JavaScript或CSS文件。
-- 不使用 `innerHTML` 注入不可信字符串。
-- 不使用Inline Event Handler。
-- 必须兼容严格Content Security Policy。
-- 邮件HTML只能在强Sandbox、无Credential环境中渲染。
-- 默认阻止邮件外部图片，避免Tracking Pixel。
-- UI覆盖Loading、Empty、Partial、Error、Unauthorized和Offline状态。
-- Accessibility与Keyboard Navigation是发布要求。
-- 生产Asset使用Content Hash与Compression。
-
-## 20. 容器与部署
-
-- `deploy/compose/`是Canonical单机Reference Deployment，也是README、CI、Release、备份恢复与容量验证的主推荐路径；`deploy/reference/` Host-native只作为辅助Profile，不得与Compose并列描述为默认方案。
-- 生产Image使用固定Version Tag，Release Lock可进一步固定Digest。
-- 禁止使用 `latest`、未限定Major的浮动依赖和无法复现的远程安装脚本。
-- Go、Module、Base Image、Node、Package Manager、Frontend Dependency、CI Action和开发工具必须固定明确版本。
-- 版本选择必须记录发布日期、维护状态、安全支持、升级成本和与目标平台的兼容性。
-- 使用Lockfile并提交Lockfile；自动升级只能创建可审查PR，不得自动部署生产。
-- 依赖升级必须经过测试、安全扫描、Migration兼容和必要的Benchmark，不得只因“版本更新”而合并。
-- Go使用 `-trimpath` 构建且不泄漏VCS信息。
-- 技术上可行时Runtime Container必须Non-root。
-- 兼容的服务增加 `no-new-privileges`、Capability限制、Read-only Filesystem和日志上限。
-- PostgreSQL与Redis端口不得公开。
-- 公网只开放Nginx HTTP(S)和Postfix SMTP。
-- Compose Healthcheck使用Readiness，不使用单纯进程存在判断。
-- 部署必须支持Graceful Shutdown与Rollback。
-- Host专用配置放在 `deploy/`，不得包含Secret。
-
-## 21. 测试与质量门禁
-
-- 新行为必须在同一Change中增加测试。
-- 领域规则和Parser优先使用Table-driven Test。
-- Unit Test不得依赖公网。
-- Integration Test覆盖PostgreSQL Migration、Repository和Redis原子行为。
-- End-to-end Test覆盖SMTP/LMTP收件直到API读取。
-- Security Test覆盖Authentication、Scope、Ownership、Rate Limit、恶意MIME和HTML隔离。
-- Migration Test必须从前一MailWisp Schema版本或受支持Release备份恢复，并核对Count和Invariant。
-- 完成Go变更前必须执行：
+Go 基础门禁：
 
 ```text
 gofmt
@@ -330,112 +166,32 @@ go vet ./...
 govulncheck ./...
 ```
 
-- 前端变更必须额外执行Type Check、Unit Test、Lint和Production Build。
-- 部署变更必须额外执行Compose Render和Container Build。
-- 窄范围测试通过不能证明广范围兼容。
+此外：
 
-## 22. 外部API兼容
+- Parser、Token、Cursor 等攻击面运行固定时长 Fuzz。
+- PostgreSQL、Crash、Postfix 使用真实 Integration Test，不以 Mock 替代协议证据。
+- 前端运行 Type Check、Oxlint、Unit、Production Build 和 Playwright。
+- 部署运行 Compose Render、Image Build、Production E2E、Backup Verify、原卷删除后的 DR 与零残留检查。
+- 安全运行 Gosec、Gitleaks 工作树与历史、GitGuardian、npm audit、Trivy Image/IaC。
+- `scripts/verify.ps1` 是本地全量门禁入口；CI Workflow 不能弱于它覆盖的关键 Contract。
 
-- 内部Domain Model与Canonical API由MailWisp自身约束定义，不直接复制任何第三方API的数据结构。
-- Cloudflare Temp Email、215.im、DuckMail等兼容能力通过独立Adapter实现。
-- Adapter只负责Authentication、Path、Field、Status Code和Error Envelope转换，不得把第三方命名渗透到领域层。
-- 每个兼容目标必须有来源可追溯的Contract Fixture与Contract Test。
-- 文档不清、行为不稳定或安全模型冲突时，可以明确声明不兼容，不以牺牲核心架构为代价追求表面兼容。
-- 兼容范围必须版本化，文档明确列出Supported、Partially Supported与Unsupported行为。
-- 不得冒用第三方商标，也不得声称官方兼容关系。
+## 14. Git 与 PR 闭环
 
-## 23. 可观测性
+- 开始前确认 `main` 与 `origin/main` 同步、工作树状态和已有用户改动。
+- 每个任务使用语义分支；Commit 原子、可审查，不混入无关格式化或生成物。
+- Push 后创建 Draft PR，写清目标、风险、迁移、测试与回滚；检查全绿并完成 Review 后转 Ready。
+- 禁止 Force Push；Base 漂移时正常合并或 Rebase，并重新运行受影响门禁。
+- 合并默认使用 Squash Merge；合并后确认 `main` Push Workflow 全绿，再删除远程任务分支。
+- 生产、DNS、真实 Secret 或平台权限变化即使代码完成也必须等待用户单独授权。
 
-- 日志必须结构化，并在适用时包含Request ID或Job ID。
-- 预期客户端错误不得制造大量Stack Trace噪声。
-- Health响应不得暴露Secret和内部拓扑。
-- 至少监控HTTP延迟/错误、LMTP Queue Depth、投递延迟/失败、数据库Pool、Redis错误、Cleanup数量和Postfix Queue。
-- Metrics Label必须有界，禁止使用Email Address、Token ID、Message ID或任意Domain作为Label。
+## 15. 完成定义
 
-## 24. 完整Git工作流
+只有同时满足以下事实，任务才完成：
 
-### 分支模型
-
-- `main` 始终代表可构建、可测试、可发布的稳定状态。
-- 初始化仓库的Bootstrap Commit可以直接建立 `main`；之后功能开发不得直接在 `main` 上进行。
-- 开发使用短生命周期分支：
-  - `feat/<name>`：新功能。
-  - `fix/<name>`：缺陷修复。
-  - `refactor/<name>`：行为保持的重构。
-  - `perf/<name>`：有Benchmark证据的性能优化。
-  - `security/<name>`：安全修复。
-  - `test/<name>`：测试体系。
-  - `docs/<name>`：文档与ADR。
-  - `chore/<name>`：工具链和维护。
-- 分支名使用小写英文与连字符，简洁表达目标。
-
-### 开始开发
-
-1. 确认当前目录、仓库和远程地址正确。
-2. 执行 `git status --short`，识别并保护已有改动。
-3. 获取远程更新时使用非破坏性命令。
-4. 从最新稳定 `main` 创建任务分支。
-5. 开始修改前明确本次Change的范围和验收证据。
-
-### 提交前
-
-1. 检查 `git diff --check`。
-2. 检查 `git status --short`，确认没有Secret、Dump、Raw Mail或构建产物。
-3. 阅读完整Diff，不能只看文件名。
-4. 执行与改动范围匹配的全部质量门禁。
-5. 验证README、示例配置和ADR是否与实现一致。
-6. 任何失败或未执行检查都必须在交付说明中明确列出。
-
-### Commit规范
-
-- 使用Conventional Commits：
-  - `feat:`、`fix:`、`refactor:`、`perf:`、`security:`、`test:`、`docs:`、`chore:`、`ci:`、`build:`。
-- 主题使用祈使语气，简洁说明结果，默认中文。
-- 一个Commit只表达一个完整意图，并保持可构建、可测试。
-- 不把无关格式化、重命名和行为修改混在同一个Commit。
-- 不提交Secret、生产数据、Raw Mail、Dump和本地产物。
-- 不修改或Amend不属于自己的已有Commit，除非用户明确要求。
-
-### Push规范
-
-- Push前再次执行 `git status` 和必要验证。
-- 首次Push使用 `git push -u origin <branch>` 建立Upstream。
-- 只Push当前任务相关分支和明确授权的Tag。
-- 禁止 `git push --force`；确有必要且用户明确授权时只能使用 `--force-with-lease`。
-- 禁止删除远程Branch、Tag或Release，除非用户明确授权。
-- 未经授权不得Push到非本项目Remote。
-
-### Pull Request规范
-
-- 除仓库初始化外，变更通过PR合并到 `main`。
-- PR标题遵循Conventional Commits风格。
-- PR描述默认中文，至少包含：目标、主要改动、风险、数据/迁移影响、验证命令与结果、回滚方式。
-- CI未通过、Review未完成或迁移未验证时不得合并。
-- 用户已将本仓库日常研发全闭环授权给Codex；Codex负责调研与决策、分支、实现、测试、Commit、Push、PR、GitHub Actions、Review处理、修复、Draft转Ready、Stack合并顺序、实际合并、后续Base同步、已完成任务分支清理与证据收尾，无需在每个常规环节再次请求确认。
-- 上述授权不降低任何门禁，也不扩大到生产部署、DNS、真实Secret、仓库权限或其他高风险外部系统变更；存在未解决Review、失败检查、未验证Migration、安全边界不清或Base漂移时必须继续保持Draft或暂停合并。
-- 合并策略优先Squash Merge，保持 `main` 历史清晰；需要保留独立Commit语义时再使用Merge Commit。
-- 合并后才删除已完成的远程任务分支，并遵守仓库设置。
-
-### Release规范
-
-- 使用Semantic Versioning：`vMAJOR.MINOR.PATCH`。
-- Release前必须从干净Checkout完成测试、漏洞扫描、前端构建、镜像构建、Migration与恢复验证。
-- Tag必须指向 `main` 上已验证的Commit。
-- Release Notes默认中文，明确Breaking Change、Migration、配置变化和Rollback步骤。
-- 不发布来源不明或无法通过Git Commit复现的镜像。
-
-## 25. 完成定义
-
-只有满足以下条件，任务才算完成：
-
-- 请求的行为已真实实现，而非只有Scaffold。
-- 命名、Package边界和依赖方向符合本文件。
-- Error、Cancellation、Overload和Shutdown路径已处理。
-- 相关测试存在且通过。
-- Security和Data Lifecycle影响已审查。
-- 文档、示例与代码一致。
-- Git中没有Secret和生产数据。
-- Compatibility声明必须有对应第三方一手文档、固定版本Fixture与Contract Test作为权威证据。
-- Git流程、Commit、Push和PR步骤没有被跳过。
-- 所有操作在用户授权范围内，没有越权。
-- 最终仓库具有明确Reference Profile、容量模型和匹配资源建议，不以现有服务器限制质量。
+- 请求行为已真实实现，不是 Scaffold、文档承诺或 Mock 演示。
+- Error、Cancellation、Overload、Crash、Shutdown、Migration、Deletion 和 Recovery 路径有证据。
+- 代码、配置、示例、ADR、Compatibility 与运维文档一致。
+- 相关 Unit、Race、Integration、E2E、安全和 Release 门禁全部通过。
+- 工作树无 Secret、生产数据、临时容器、孤立 Volume 和未解释 Artifact。
+- Commit、Push、PR、Actions、Review、Squash Merge 与 `main` 复验完整闭环。
+- 所有操作均在授权范围内；外部平台限制必须准确披露，不得伪造完成。

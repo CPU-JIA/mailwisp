@@ -4,6 +4,8 @@
 
 > 边界更新：ADR 0018已将旧TempMail完全移出项目范围。本报告中涉及旧TempMail的早期比较不再构成需求、迁移、复用或架构证据；当前决策只以MailWisp自身约束、协议标准、真实测量和第三方一手Contract为准。
 
+> 状态更新：本文是2026-07-14的研究快照，不是现行架构或待办清单。此后已由ADR 0011/0013确定Nginx与Canonical Compose，由ADR 0004/0007/0009完成存储、Postfix与Parser故障链，由ADR 0019/0021/0022/0023完成容量、生产浏览器、灾备与Release门禁；当前事实以README、版本锁、Compatibility文档和已接受ADR为准。
+
 ## 一、一句话定义
 
 MailWisp是一套以可靠收件为核心、面向自托管场景的临时邮箱系统：它用成熟邮件基础设施接住公网SMTP的不确定性，用Go模块化单体控制业务复杂度，用PostgreSQL与可替换内容存储保证数据生命周期，再通过Canonical API和独立Adapter兼容外部生态。

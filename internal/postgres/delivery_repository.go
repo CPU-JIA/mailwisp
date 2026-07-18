@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"mailwisp/internal/message"
+	"mailwisp/migrations"
 )
 
 var (
@@ -65,15 +66,15 @@ func NewDeliveryRepositoryWithLimits(pool *pgxpool.Pool, limits DeliveryLimits) 
 
 // Ready verifies that PostgreSQL can serve a short request.
 func (r *DeliveryRepository) Ready(ctx context.Context) error {
-	var ready int
+	var version int64
 	if err := r.pool.QueryRow(ctx, `
-		SELECT 1
-		FROM inboxes
-		WHERE false
-	`).Scan(&ready); !errors.Is(err, pgx.ErrNoRows) {
-		if err != nil {
-			return fmt.Errorf("verify postgres schema: %w", err)
-		}
+		SELECT COALESCE(max(version_id) FILTER (WHERE is_applied), 0)
+		FROM goose_db_version
+	`).Scan(&version); err != nil {
+		return fmt.Errorf("read postgres schema version: %w", err)
+	}
+	if version != migrations.LatestVersion {
+		return fmt.Errorf("postgres schema version is %d, require %d; run mailwisp migrate", version, migrations.LatestVersion)
 	}
 	return nil
 }
@@ -103,7 +104,7 @@ func (r *DeliveryRepository) ResolveInboxForDelivery(ctx context.Context, addres
 		LEFT JOIN mail_contents AS content ON content.content_key = message.content_key
 		WHERE inbox.address = $1
 		  AND inbox.status = 'active'
-		  AND (inbox.expires_at IS NULL OR inbox.expires_at > now())
+		  AND inbox.expires_at > now()
 		GROUP BY inbox.id
 	`, address).Scan(&inboxID, &messageCount, &storageBytes)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -128,7 +129,7 @@ func (r *DeliveryRepository) resolveInbox(ctx context.Context, address string) (
 		FROM inboxes
 		WHERE address = $1
 		  AND status = 'active'
-		  AND (expires_at IS NULL OR expires_at > now())
+		  AND expires_at > now()
 	`, address).Scan(&inboxID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", message.ErrInboxNotFound
@@ -154,10 +155,8 @@ func (r *DeliveryRepository) CommitDelivery(ctx context.Context, delivery messag
 		defer cancel()
 		_ = transaction.Rollback(rollbackContext)
 	}()
-	if r.enforceLimits {
-		if err := r.lockAndCheckDeliveryRecipients(ctx, transaction, delivery); err != nil {
-			return nil, err
-		}
+	if err := r.lockAndCheckDeliveryRecipients(ctx, transaction, delivery); err != nil {
+		return nil, err
 	}
 
 	tag, err := transaction.Exec(ctx, `
@@ -222,7 +221,7 @@ func (r *DeliveryRepository) lockAndCheckDeliveryRecipients(ctx context.Context,
 		FROM inboxes
 		WHERE id = ANY($1::uuid[])
 		  AND status = 'active'
-		  AND (expires_at IS NULL OR expires_at > now())
+		  AND expires_at > now()
 		ORDER BY id
 		FOR UPDATE
 	`, recipientUUIDs)
@@ -235,6 +234,9 @@ func (r *DeliveryRepository) lockAndCheckDeliveryRecipients(ctx context.Context,
 	}
 	if len(locked) != len(delivery.Recipients) {
 		return message.ErrInboxNotFound
+	}
+	if !r.enforceLimits {
+		return nil
 	}
 
 	rows, err = transaction.Query(ctx, `

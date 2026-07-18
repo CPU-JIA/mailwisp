@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
@@ -380,6 +381,52 @@ func TestMailboxRepositoryEnforcesOwnershipAndDeletesUnreferencedContent(t *test
 	if contentCount != 0 {
 		t.Fatalf("content count = %d, want 0", contentCount)
 	}
+	deletions, err := repository.ListContentDeletions(context.Background(), 10)
+	if err != nil || len(deletions) != 1 || deletions[0].Content != ref || deletions[0].Generation != 1 {
+		t.Fatalf("ListContentDeletions() = %+v, %v", deletions, err)
+	}
+	if referenced, err := repository.ContentReferenced(context.Background(), ref.Key); err != nil || referenced {
+		t.Fatalf("ContentReferenced() = %t, %v", referenced, err)
+	}
+	if acknowledged, err := repository.AcknowledgeContentDeletion(context.Background(), ref.Key, 2); err != nil || acknowledged {
+		t.Fatalf("AcknowledgeContentDeletion(stale) = %t, %v", acknowledged, err)
+	}
+	if acknowledged, err := repository.AcknowledgeContentDeletion(context.Background(), ref.Key, 1); err != nil || !acknowledged {
+		t.Fatalf("AcknowledgeContentDeletion(current) = %t, %v", acknowledged, err)
+	}
+}
+
+func TestContentDeletionQueueGenerationPreventsStaleAcknowledgement(t *testing.T) {
+	pool := newIntegrationPool(t)
+	resetIntegrationDatabase(t, pool)
+	repository, err := NewMailboxRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := message.ContentRef{Key: contentKey("d"), SizeBytes: 64}
+	for range 2 {
+		transaction, err := pool.Begin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := enqueueContentDeletion(context.Background(), transaction, ref); err != nil {
+			_ = transaction.Rollback(context.Background())
+			t.Fatal(err)
+		}
+		if err := transaction.Commit(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deletions, err := repository.ListContentDeletions(context.Background(), 10)
+	if err != nil || len(deletions) != 1 || deletions[0].Generation != 2 {
+		t.Fatalf("ListContentDeletions() = %+v, %v", deletions, err)
+	}
+	if acknowledged, err := repository.AcknowledgeContentDeletion(context.Background(), ref.Key, 1); err != nil || acknowledged {
+		t.Fatalf("AcknowledgeContentDeletion(old generation) = %t, %v", acknowledged, err)
+	}
+	if acknowledged, err := repository.AcknowledgeContentDeletion(context.Background(), ref.Key, 2); err != nil || !acknowledged {
+		t.Fatalf("AcknowledgeContentDeletion(new generation) = %t, %v", acknowledged, err)
+	}
 }
 
 func TestMailboxRepositoryCursorPaginationCoversFullInboxDuringConcurrentInsert(t *testing.T) {
@@ -485,6 +532,10 @@ func TestMailboxDeleteKeepsContentSharedWithAnotherInbox(t *testing.T) {
 	if remaining != 1 {
 		t.Fatalf("remaining messages = %d, want 1", remaining)
 	}
+	deletions, err := repository.ListContentDeletions(context.Background(), 10)
+	if err != nil || len(deletions) != 0 {
+		t.Fatalf("shared content deletion queue = %+v, %v, want empty", deletions, err)
+	}
 
 	store, err := contentstore.Open(t.TempDir(), contentstore.Options{MaxBytes: 1 << 20})
 	if err != nil {
@@ -493,6 +544,114 @@ func TestMailboxDeleteKeepsContentSharedWithAnotherInbox(t *testing.T) {
 	stored, err := store.Put(context.Background(), bytes.NewReader([]byte("mail")))
 	if err != nil || stored.SizeBytes != 4 {
 		t.Fatalf("content fixture = %+v, error = %v", stored, err)
+	}
+}
+
+func TestMailboxDeleteSerializesWithConcurrentDelivery(t *testing.T) {
+	t.Run("delivery commits before deletion snapshot", func(t *testing.T) {
+		pool := newIntegrationPool(t)
+		resetIntegrationDatabase(t, pool)
+		mailboxes, _ := NewMailboxRepository(pool)
+		deliveries := newIntegrationRepository(t, pool)
+		now := time.Now().UTC()
+		inbox, _ := mailboxes.CreateInbox(context.Background(), mailbox.NewInbox{Address: "deliver-first@mailwisp.test", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+		ref := message.ContentRef{Key: contentKey("7"), SizeBytes: 7}
+		beforeCommit := make(chan struct{})
+		releaseCommit := make(chan struct{})
+		deliveries.commitObserver = func(stage deliveryCommitStage) {
+			if stage == deliveryCommitStageBefore {
+				close(beforeCommit)
+				<-releaseCommit
+			}
+		}
+		deliveryResult := make(chan error, 1)
+		go func() {
+			_, err := deliveries.CommitDelivery(context.Background(), validDelivery(inbox.ID, ref.Key, ref.SizeBytes))
+			deliveryResult <- err
+		}()
+		select {
+		case <-beforeCommit:
+		case <-time.After(5 * time.Second):
+			t.Fatal("delivery did not reach the commit barrier")
+		}
+		type deleteResult struct {
+			refs []message.ContentRef
+			err  error
+		}
+		deleted := make(chan deleteResult, 1)
+		go func() {
+			refs, err := mailboxes.DeleteInbox(context.Background(), inbox.ID)
+			deleted <- deleteResult{refs: refs, err: err}
+		}()
+		select {
+		case result := <-deleted:
+			t.Fatalf("deletion bypassed the delivery lock: %+v", result)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(releaseCommit)
+		if err := <-deliveryResult; err != nil {
+			t.Fatalf("CommitDelivery() error = %v", err)
+		}
+		result := <-deleted
+		if result.err != nil || len(result.refs) != 1 || result.refs[0] != ref {
+			t.Fatalf("DeleteInbox() = %+v", result)
+		}
+		assertMailboxDeleteCounts(t, pool, 0, 0, 0)
+	})
+
+	t.Run("deletion commits before delivery admission", func(t *testing.T) {
+		pool := newIntegrationPool(t)
+		resetIntegrationDatabase(t, pool)
+		mailboxes, _ := NewMailboxRepository(pool)
+		deliveries := newIntegrationRepository(t, pool)
+		now := time.Now().UTC()
+		inbox, _ := mailboxes.CreateInbox(context.Background(), mailbox.NewInbox{Address: "delete-first@mailwisp.test", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+		ref := message.ContentRef{Key: contentKey("8"), SizeBytes: 8}
+		deleteLocked := make(chan struct{})
+		releaseDelete := make(chan struct{})
+		mailboxes.lockObserver = func(message.InboxID) {
+			close(deleteLocked)
+			<-releaseDelete
+		}
+		deleteResult := make(chan error, 1)
+		go func() {
+			_, err := mailboxes.DeleteInbox(context.Background(), inbox.ID)
+			deleteResult <- err
+		}()
+		select {
+		case <-deleteLocked:
+		case <-time.After(5 * time.Second):
+			t.Fatal("deletion did not acquire the Inbox lock")
+		}
+		deliveryResult := make(chan error, 1)
+		go func() {
+			_, err := deliveries.CommitDelivery(context.Background(), validDelivery(inbox.ID, ref.Key, ref.SizeBytes))
+			deliveryResult <- err
+		}()
+		select {
+		case err := <-deliveryResult:
+			t.Fatalf("delivery bypassed the deletion lock: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(releaseDelete)
+		if err := <-deleteResult; err != nil {
+			t.Fatalf("DeleteInbox() error = %v", err)
+		}
+		if err := <-deliveryResult; !errors.Is(err, message.ErrInboxNotFound) {
+			t.Fatalf("CommitDelivery(after deletion) error = %v", err)
+		}
+		assertMailboxDeleteCounts(t, pool, 0, 0, 0)
+	})
+}
+
+func assertMailboxDeleteCounts(t *testing.T, pool *pgxpool.Pool, wantInboxes, wantContents, wantMessages int) {
+	t.Helper()
+	var inboxes, contents, messages int
+	if err := pool.QueryRow(context.Background(), "SELECT (SELECT count(*) FROM inboxes), (SELECT count(*) FROM mail_contents), (SELECT count(*) FROM messages)").Scan(&inboxes, &contents, &messages); err != nil {
+		t.Fatal(err)
+	}
+	if inboxes != wantInboxes || contents != wantContents || messages != wantMessages {
+		t.Fatalf("remaining counts = inboxes %d contents %d messages %d, want %d/%d/%d", inboxes, contents, messages, wantInboxes, wantContents, wantMessages)
 	}
 }
 
@@ -535,5 +694,9 @@ func TestMailboxCleanupDeletesExpiredInBoundedBatches(t *testing.T) {
 	}
 	if inboxes != 1 || contents != 1 || messages != 1 {
 		t.Fatalf("remaining counts = inboxes %d contents %d messages %d", inboxes, contents, messages)
+	}
+	deletions, err := repository.ListContentDeletions(context.Background(), 10)
+	if err != nil || len(deletions) != 1 || deletions[0].Content != exclusive {
+		t.Fatalf("cleanup deletion queue = %+v, %v", deletions, err)
 	}
 }

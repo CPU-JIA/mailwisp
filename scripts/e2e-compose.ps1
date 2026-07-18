@@ -169,6 +169,18 @@ function Wait-HTTPSReady {
     throw "HTTPS readiness did not succeed within $TimeoutSeconds seconds: $URI"
 }
 
+function Assert-HTTPSSecurityHeaders {
+    param([Parameter(Mandatory)][string]$URI)
+
+    $response = Invoke-WebRequest -Uri $URI -SkipCertificateCheck -TimeoutSec 5
+    if ($response.StatusCode -ne 200) { throw "HTTPS root returned status $($response.StatusCode)." }
+    $hsts = [string]$response.Headers['Strict-Transport-Security']
+    $csp = [string]$response.Headers['Content-Security-Policy']
+    if ($hsts -ne 'max-age=31536000') { throw "HTTPS root returned an invalid Strict-Transport-Security header: $hsts" }
+    if (-not $csp.Contains("default-src 'self'", [StringComparison]::Ordinal)) { throw 'HTTPS root did not return the required Content-Security-Policy.' }
+    if ([string]$response.Headers['X-Content-Type-Options'] -ne 'nosniff') { throw 'HTTPS root did not return X-Content-Type-Options: nosniff.' }
+}
+
 function Assert-HTTPRedirect {
     param([Parameter(Mandatory)][int]$Port)
 
@@ -226,7 +238,7 @@ function Save-E2EDiagnostics {
     $utf8 = [System.Text.UTF8Encoding]::new($false)
     foreach ($capture in @(
         @{ Name = 'compose-ps.json'; Command = { & docker compose @ComposeArguments ps -a --format json 2>&1 | Out-String } },
-        @{ Name = 'compose.log'; Command = { & docker compose @ComposeArguments logs --no-color postgres migrate app edge postfix 2>&1 | Out-String } },
+        @{ Name = 'compose.log'; Command = { & docker compose @ComposeArguments logs --no-color postgres db-provision migrate app edge postfix 2>&1 | Out-String } },
         @{ Name = 'nginx.txt'; Command = { & docker compose @ComposeArguments exec -T edge nginx -T 2>&1 | Out-String } },
         @{ Name = 'postfix.txt'; Command = { & docker compose @ComposeArguments exec -T postfix postconf -n 2>&1 | Out-String } }
     )) {
@@ -310,9 +322,9 @@ $composeArguments = @('-p', $projectName)
 foreach ($candidate in $composeFilesResolved) { $composeArguments += @('-f', $candidate) }
 $composeArguments += @('-f', $e2eComposeFile)
 $managedEnvironment = @(
-    'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
+    'MAILWISP_ENV_FILE', 'MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE', 'MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE', 'MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE',
     'MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE', 'MAILWISP_WEB_DOMAIN', 'MAILWISP_SMTP_HOST',
-    'MAILWISP_MAIL_DOMAIN', 'MAILWISP_CERT_NAME', 'MAILWISP_E2E_CERT_ROOT', 'MAILWISP_E2E_HTTP_PORT',
+    'MAILWISP_PUBLIC_DOMAINS', 'MAILWISP_LMTP_MAX_MESSAGE_BYTES', 'MAILWISP_CERT_NAME', 'MAILWISP_E2E_CERT_ROOT', 'MAILWISP_E2E_HTTP_PORT',
     'MAILWISP_E2E_HTTPS_PORT', 'MAILWISP_E2E_SMTP_PORT', 'MAILWISP_E2E_BASE_URL', 'MAILWISP_IMAGE_TAG'
 )
 $originalEnvironment = @{}
@@ -327,21 +339,26 @@ try {
     New-E2ECertificate -CertificateRoot $certificateRoot
     $utf8 = [System.Text.UTF8Encoding]::new($false)
     $mailwispEnvironment = Join-Path $fixtureRoot 'mailwisp.env'
-    $postgresPassword = Join-Path $fixtureRoot 'postgres_password.txt'
+    $postgresOwnerPassword = Join-Path $fixtureRoot 'postgres_owner_password.txt'
+    $postgresAppPassword = Join-Path $fixtureRoot 'postgres_app_password.txt'
     $browserSessionKey = Join-Path $fixtureRoot 'browser_session_key.txt'
     $createQuotaKey = Join-Path $fixtureRoot 'create_quota_hmac_key.txt'
     [System.IO.File]::WriteAllText($mailwispEnvironment, "MAILWISP_LOG_LEVEL=info`nMAILWISP_TRUSTED_PROXY_CIDRS=172.16.0.0/12`nMAILWISP_PUBLIC_DOMAINS=mailwisp.test`nMAILWISP_LMTP_HOSTNAME=mx.mailwisp.test`n", $utf8)
-    [System.IO.File]::WriteAllText($postgresPassword, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
+    [System.IO.File]::WriteAllText($postgresOwnerPassword, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
+    [System.IO.File]::WriteAllText($postgresAppPassword, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
     [System.IO.File]::WriteAllText($browserSessionKey, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
     [System.IO.File]::WriteAllText($createQuotaKey, ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) + "`n"), $utf8)
 
     $env:MAILWISP_ENV_FILE = $mailwispEnvironment
-    $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $postgresPassword
+    if (-not $IsWindows) { Invoke-Native -Name 'chmod 0444 E2E secrets' -Command { chmod 0444 $postgresOwnerPassword $postgresAppPassword $browserSessionKey $createQuotaKey } }
+    $env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE = $postgresOwnerPassword
+    $env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE = $postgresAppPassword
     $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $browserSessionKey
     $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $createQuotaKey
     $env:MAILWISP_WEB_DOMAIN = 'mailwisp.test'
     $env:MAILWISP_SMTP_HOST = 'mx.mailwisp.test'
-    $env:MAILWISP_MAIL_DOMAIN = 'mailwisp.test'
+    $env:MAILWISP_PUBLIC_DOMAINS = 'mailwisp.test'
+    $env:MAILWISP_LMTP_MAX_MESSAGE_BYTES = '26214400'
     $env:MAILWISP_CERT_NAME = 'e2e'
     $env:MAILWISP_E2E_CERT_ROOT = $certificateRoot
     $env:MAILWISP_E2E_HTTP_PORT = [string]$HTTPPort
@@ -362,13 +379,15 @@ try {
     if (-not $SkipBuild) {
         $stage = 'production image build'
         Invoke-Native -Name 'production E2E images' -Command { docker compose @composeArguments build --pull app edge postfix }
-        $stage = 'PostgreSQL image pull'
-        Invoke-NativeWithRetry -Name 'production E2E PostgreSQL pull' -Command { docker compose @composeArguments pull postgres }
     }
+    $stage = 'pinned PostgreSQL image pull'
+    Invoke-NativeWithRetry -Name 'production E2E PostgreSQL pull' -Command { docker compose @composeArguments pull postgres }
     $stage = 'Compose stack startup'
     Invoke-Native -Name 'production E2E stack startup' -Command { docker compose @composeArguments up -d postgres migrate app edge postfix }
     $stage = 'HTTPS readiness'
     Wait-HTTPSReady -URI "$($env:MAILWISP_E2E_BASE_URL)/readyz"
+    $stage = 'HTTPS security header validation'
+    Assert-HTTPSSecurityHeaders -URI "$($env:MAILWISP_E2E_BASE_URL)/"
     $stage = 'HTTP to HTTPS redirect validation'
     Assert-HTTPRedirect -Port $HTTPPort
     $stage = 'SMTP readiness'
@@ -377,6 +396,19 @@ try {
     Invoke-Native -Name 'production E2E Nginx configuration' -Command { docker compose @composeArguments exec -T edge nginx -t }
     $stage = 'Postfix configuration validation'
     Invoke-Native -Name 'production E2E Postfix configuration' -Command { docker compose @composeArguments exec -T postfix postfix check }
+    $postfixVerifyMap = (& docker compose @composeArguments exec -T postfix postconf -h address_verify_map).Trim()
+    $postfixVerifyTransport = (& docker compose @composeArguments exec -T postfix postconf -h address_verify_relay_transport).Trim()
+    $postfixPositiveExpiry = (& docker compose @composeArguments exec -T postfix postconf -h address_verify_positive_expire_time).Trim()
+    $postfixNegativeExpiry = (& docker compose @composeArguments exec -T postfix postconf -h address_verify_negative_expire_time).Trim()
+    if ($LASTEXITCODE -ne 0 -or $postfixVerifyMap -ne 'lmdb:$data_directory/verify_cache' -or
+        $postfixVerifyTransport -ne 'lmtp:inet:app:2525' -or $postfixPositiveExpiry -ne '2s' -or $postfixNegativeExpiry -ne '2s') {
+        throw "Postfix address verification contract mismatch: map=$postfixVerifyMap transport=$postfixVerifyTransport positive=$postfixPositiveExpiry negative=$postfixNegativeExpiry"
+    }
+    $stage = 'PostgreSQL runtime role validation'
+    $runtimeRole = (& docker compose @composeArguments exec -T postgres psql -X -q -U mailwisp_owner -d mailwisp -Atc "SELECT concat_ws('|', rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolreplication, rolbypassrls, has_database_privilege('mailwisp_app', 'mailwisp', 'CREATE'), has_database_privilege('mailwisp_app', 'mailwisp', 'TEMPORARY'), has_schema_privilege('mailwisp_app', 'public', 'CREATE'), has_schema_privilege('mailwisp_app', 'public', 'USAGE'), has_table_privilege('mailwisp_app', 'inboxes', 'SELECT,INSERT,UPDATE,DELETE')) FROM pg_roles WHERE rolname = 'mailwisp_app';").Trim()
+    if ($LASTEXITCODE -ne 0 -or $runtimeRole -ne 'f|f|f|f|f|f|f|f|f|t|t') {
+        throw "PostgreSQL runtime role is overprivileged or missing: $runtimeRole"
+    }
 
     $stage = 'published endpoint validation'
     $publishedHTTP = (& docker compose @composeArguments port edge 80).Trim()

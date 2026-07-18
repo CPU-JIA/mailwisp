@@ -46,6 +46,17 @@ describe('MailWispClient', () => {
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer wisp_cap_secret' })
   })
 
+  it('streams owned Raw Source without placing the capability in the URL', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('Subject: failed\r\n\r\nraw', { status: 200, headers: { 'Content-Type': 'message/rfc822' } }))
+    const client = new MailWispClient('https://mail.example')
+    const blob = await client.downloadSource('wisp_cap_secret', 'message-id')
+    expect(await blob.text()).toBe('Subject: failed\r\n\r\nraw')
+    const [url, init] = fetchMock.mock.calls[0] ?? []
+    expect(url).toBe('https://mail.example/api/v1/inboxes/me/messages/message-id/source')
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer wisp_cap_secret' })
+    expect(String(url)).not.toContain('wisp_cap_secret')
+  })
+
   it('uses Cookie session CSRF for mutations without exposing a capability', async () => {
     const inbox = { id: '1', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
     const fetchMock = vi.spyOn(globalThis, 'fetch')
@@ -58,5 +69,34 @@ describe('MailWispClient', () => {
     expect(url).toBe('https://mail.example/api/v1/inboxes/me')
     expect(init?.headers).toMatchObject({ 'X-MailWisp-CSRF': 'csrf-proof' })
     expect(init?.headers).not.toHaveProperty('Authorization')
+  })
+
+  it('marks an opened message seen through the scoped canonical mutation', async () => {
+    const inbox = { id: '1', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf-proof' } }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = new MailWispClient('https://mail.example')
+    await client.exchangeSession('wisp_cap_secret')
+    await client.markMessageSeen('', 'message/id')
+    const [url, init] = fetchMock.mock.calls[1] ?? []
+    expect(url).toBe('https://mail.example/api/v1/inboxes/me/messages/message%2Fid')
+    expect(init?.method).toBe('PATCH')
+    expect(init?.headers).toMatchObject({ 'X-MailWisp-CSRF': 'csrf-proof', 'Content-Type': 'application/json' })
+    expect(init?.body).toBe('{"seen":true}')
+  })
+
+  it('forgets browser-session CSRF after inbox deletion clears the session Cookie', async () => {
+    const inbox = { id: '1', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf-proof' } }), { status: 201, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const client = new MailWispClient('https://mail.example')
+    await client.exchangeSession('wisp_cap_secret')
+    await client.deleteInbox('')
+    await client.deleteSession()
+    const [, init] = fetchMock.mock.calls[2] ?? []
+    expect(init?.headers).not.toHaveProperty('X-MailWisp-CSRF')
   })
 })

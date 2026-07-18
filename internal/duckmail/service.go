@@ -188,19 +188,11 @@ func (s *Service) Mailboxes() MailboxService { return s.mailboxes }
 func (s *Service) validateAddress(raw string) (string, error) {
 	address := strings.ToLower(strings.TrimSpace(raw))
 	local, domain, found := strings.Cut(address, "@")
-	if !found || len(local) < 3 || len(local) > 64 {
+	if !found || len(local) < 3 || !message.ValidInboxLocalPart(local) {
 		return "", ErrInvalidAccount
 	}
 	if _, allowed := s.allowed[domain]; !allowed {
 		return "", ErrInvalidAccount
-	}
-	for index, character := range local {
-		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '.' && character != '_' && character != '-' {
-			return "", ErrInvalidAccount
-		}
-		if (index == 0 || index == len(local)-1) && (character == '.' || character == '_' || character == '-') {
-			return "", ErrInvalidAccount
-		}
 	}
 	return address, nil
 }

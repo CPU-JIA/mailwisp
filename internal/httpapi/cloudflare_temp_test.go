@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,19 +30,47 @@ func TestCloudflareTempContractAddressAndRawMailWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fixture struct {
-		SourceCommit string   `json:"source_commit"`
-		Namespace    string   `json:"mailwisp_namespace"`
-		Endpoints    []string `json:"endpoints"`
-		SourceFiles  []struct {
+		SourceCommit             string   `json:"source_commit"`
+		SourceVersion            string   `json:"source_version"`
+		Namespace                string   `json:"mailwisp_namespace"`
+		AuthenticationProjection string   `json:"authentication_projection"`
+		LegacyPathsDefault       bool     `json:"legacy_paths_default"`
+		Endpoints                []string `json:"endpoints"`
+		SourceFiles              []struct {
 			Path   string `json:"path"`
 			SHA256 string `json:"sha256"`
 		} `json:"source_files"`
+		Limits struct {
+			PageItems            int `json:"page_items"`
+			ResponsePayloadBytes int `json:"response_payload_bytes"`
+		} `json:"limits"`
 	}
-	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil || fixture.SourceCommit != "99b332345bcf3beff77ed70feaec9d5e10de3590" || fixture.Namespace != "/compat/cloudflare-temp" || len(fixture.Endpoints) != 10 || len(fixture.SourceFiles) != 10 {
+	expectedEndpoints := []string{
+		"GET /open_api/settings", "GET /user_api/open_settings", "POST /api/new_address", "GET /api/settings", "GET /api/mails",
+		"GET /api/mail/{id}", "GET /api/parsed_mails", "GET /api/parsed_mail/{id}", "DELETE /api/mails/{id}", "DELETE /api/delete_address",
+	}
+	if err := json.Unmarshal(fixtureBytes, &fixture); err != nil ||
+		fixture.SourceCommit != "99b332345bcf3beff77ed70feaec9d5e10de3590" || fixture.SourceVersion != "v1.10.0" ||
+		fixture.Namespace != "/compat/cloudflare-temp" || fixture.AuthenticationProjection != "canonical_opaque_capability_in_jwt_field" ||
+		fixture.LegacyPathsDefault || !reflect.DeepEqual(fixture.Endpoints, expectedEndpoints) || len(fixture.SourceFiles) != 10 ||
+		fixture.Limits.PageItems != 20 || fixture.Limits.ResponsePayloadBytes != 32<<20 {
 		t.Fatalf("Cloudflare Temp Email fixture = %+v, error = %v", fixture, err)
 	}
+	pinnedSHA256 := func(prefix, suffix string) string { return prefix + suffix }
+	expectedSources := map[string]string{
+		"worker/src/worker.ts":                    pinnedSHA256("385dcdf7ea4e1da130726220c06a9952", "691f480744972f2a50c5a8e371461ee9"),
+		"worker/src/commom_api.ts":                pinnedSHA256("c14af6952167925139ad0a7cd41f2027", "16c3fa7af158cb4482a6c771b6895e69"),
+		"worker/src/mails_api/index.ts":           pinnedSHA256("31ef29fdd1fcc712f9b517512edb3dc8", "2f6f7062c4ecb5ed4f25e88041b17531"),
+		"worker/src/mails_api/new_address.ts":     pinnedSHA256("806576eb038fd01039b205444ca98a2d", "a5a41e4076b03881cb398a1f741306af"),
+		"worker/src/mails_api/mails_crud.ts":      pinnedSHA256("e92b446e6f19e198fc9cbceded702d9a", "657053c8747a5604c972cedd8121f8d0"),
+		"worker/src/mails_api/parsed_mail_api.ts": pinnedSHA256("7c7af300f298bbcf82b8d49aacea9e36", "11de289d961e310f69fa45f382cbcd38"),
+		"worker/src/user_api/index.ts":            pinnedSHA256("eb551b0174ec9bb654e5d81427fb7b23", "bc2664de73a94d904d680dd30a5a6d9b"),
+		"worker/src/user_api/settings.ts":         pinnedSHA256("669b5aaf43e74ac48f8afb173005cde1", "b506b9ccc8552e4439c6a8f0a650fcda"),
+		"frontend/src/api/index.js":               pinnedSHA256("bf834cb06a33b0b8978b85ba003ce305", "7b43e51d8fa0d64b9bd2099b0726c0f7"),
+		"frontend/src/views/Index.vue":            pinnedSHA256("e6f8fd10a144ae17b11d80449224218b", "7f88afda806451afd34b2f162fda858a"),
+	}
 	for _, source := range fixture.SourceFiles {
-		if source.Path == "" || len(source.SHA256) != 64 {
+		if expectedSources[source.Path] != source.SHA256 {
 			t.Fatalf("Cloudflare Temp Email source fixture = %+v", source)
 		}
 	}
@@ -187,6 +216,9 @@ func (*cloudflareTempMailboxStub) OpenSource(context.Context, message.InboxID, m
 }
 func (*cloudflareTempMailboxStub) OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error) {
 	return mailbox.AttachmentSource{}, mailbox.ErrMessageNotFound
+}
+func (*cloudflareTempMailboxStub) MarkMessageSeen(context.Context, message.InboxID, message.MessageID) error {
+	return nil
 }
 func (*cloudflareTempMailboxStub) DeleteMessage(context.Context, message.InboxID, message.MessageID) error {
 	return nil

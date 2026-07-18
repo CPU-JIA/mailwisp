@@ -24,6 +24,7 @@ export function useMailbox(client = new MailWispClient()) {
   const error = ref<ViewError | null>(null)
   const refreshing = ref(false)
   const loadingMore = ref(false)
+  const leaving = ref(false)
   const loadMoreError = ref<ViewError | null>(null)
   let activeRequest: AbortController | null = null
   let pollTimer: number | null = null
@@ -139,10 +140,20 @@ export function useMailbox(client = new MailWispClient()) {
     cancelActiveRequest()
     activeRequest = new AbortController()
     try {
-      selected.value = await client.getMessage(token.value, summary.id, activeRequest.signal)
+      const detail = await client.getMessage(token.value, summary.id, activeRequest.signal)
+      selected.value = detail
       inlineImages.value = {}
       phase.value = 'detail'
-      void loadInlineImages(selected.value, activeRequest.signal)
+      void loadInlineImages(detail, activeRequest.signal)
+      if (!detail.seen) {
+        try {
+          await client.markMessageSeen(token.value, detail.id, activeRequest.signal)
+          detail.seen = true
+          messages.value = messages.value.map((item) => item.id === detail.id ? { ...item, seen: true } : item)
+        } catch (cause) {
+          if (cause instanceof DOMException && cause.name === 'AbortError') return
+        }
+      }
     } catch (cause) {
       handleError(cause)
     }
@@ -177,7 +188,22 @@ export function useMailbox(client = new MailWispClient()) {
       anchor.href = url
       anchor.download = attachment.file_name || 'attachment'
       anchor.click()
-      URL.revokeObjectURL(url)
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (cause) {
+      handleError(cause)
+    }
+  }
+
+  async function downloadSource(): Promise<void> {
+    if (!selected.value) return
+    try {
+      const blob = await client.downloadSource(token.value, selected.value.id)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${selected.value.id}.eml`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
     } catch (cause) {
       handleError(cause)
     }
@@ -214,16 +240,42 @@ export function useMailbox(client = new MailWispClient()) {
   async function deleteInbox(): Promise<void> {
     try {
       await client.deleteInbox(token.value)
-      reset()
+      resetLocal()
     } catch (cause) {
       handleError(cause)
     }
   }
 
-  function reset(): void {
+  async function leaveInbox(): Promise<void> {
+    if (leaving.value) return
     cancelActiveRequest()
     stopPoll()
-    if (sessionActive.value) void client.deleteSession().catch(() => undefined)
+    if (!sessionActive.value) {
+      resetLocal()
+      return
+    }
+    leaving.value = true
+    error.value = null
+    const controller = new AbortController()
+    activeRequest = controller
+    try {
+      await client.deleteSession(controller.signal)
+      if (activeRequest === controller) resetLocal()
+    } catch (cause) {
+      if (cause instanceof APIError && cause.code === 'unauthenticated') {
+        resetLocal()
+      } else {
+        handleError(cause)
+      }
+    } finally {
+      if (activeRequest === controller) activeRequest = null
+      leaving.value = false
+    }
+  }
+
+  function resetLocal(): void {
+    cancelActiveRequest()
+    stopPoll()
     sessionActive.value = false
     token.value = ''
     inbox.value = null
@@ -233,6 +285,7 @@ export function useMailbox(client = new MailWispClient()) {
     selected.value = null
     inlineImages.value = {}
     error.value = null
+    refreshing.value = false
     loadingMore.value = false
     loadMoreError.value = null
     historyExpanded = false
@@ -298,8 +351,8 @@ export function useMailbox(client = new MailWispClient()) {
   }
 
   return {
-    phase, token, sessionActive, inbox, issuedCapability, messages, nextCursor, selected, inlineImages, error, refreshing, loadingMore, loadMoreError,
-    createInbox, openInbox, refreshMessages, loadMoreMessages, openMessage, closeMessage, deleteMessage, downloadAttachment, deleteInbox, reset,
+    phase, token, sessionActive, inbox, issuedCapability, messages, nextCursor, selected, inlineImages, error, refreshing, loadingMore, leaving, loadMoreError,
+    createInbox, openInbox, refreshMessages, loadMoreMessages, openMessage, closeMessage, deleteMessage, downloadAttachment, downloadSource, deleteInbox, leaveInbox,
   }
 }
 

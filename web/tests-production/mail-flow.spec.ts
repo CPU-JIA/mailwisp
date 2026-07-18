@@ -72,7 +72,7 @@ test('delivers SMTP through the production Compose stack and completes the brows
   expect(remoteImageRequests).toEqual([])
 
   const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: '下载' }).click()
+  await page.getByRole('button', { name: '下载', exact: true }).click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe('proof.txt')
   const stream = await download.createReadStream()
@@ -80,7 +80,19 @@ test('delivers SMTP through the production Compose stack and completes the brows
   for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
   expect(Buffer.concat(chunks).toString('utf8')).toBe(attachment)
 
+  const sourceDownloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载原始邮件' }).click()
+  const sourceDownload = await sourceDownloadPromise
+  expect(sourceDownload.suggestedFilename()).toMatch(/^[0-9a-f-]{36}\.eml$/)
+  const sourceStream = await sourceDownload.createReadStream()
+  const sourceChunks: Buffer[] = []
+  for await (const chunk of sourceStream) sourceChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  const rawSource = Buffer.concat(sourceChunks).toString('utf8')
+  expect(rawSource).toContain(`Subject: ${subject}`)
+  expect(rawSource).toContain('Production pipeline body.')
+
   await page.getByRole('button', { name: '删除这封邮件' }).click()
+  await page.getByRole('button', { name: '再次点击，确认删除邮件' }).click()
   await expect(page.getByText('风还没有带来新消息')).toBeVisible()
   await page.getByRole('button', { name: '永久删除邮箱' }).click()
   await page.getByRole('button', { name: '再次点击，确认永久删除' }).click()

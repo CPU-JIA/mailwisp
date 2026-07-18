@@ -1,8 +1,8 @@
 # 外部API兼容阶段性矩阵
 
-实现更新（2026-07-15）：DuckMail、YYDS Temporary Inbox与Cloudflare Temp Email匿名Inbox核心Adapter已分别在显式命名空间实现，具有独立Contract Fixture、黑盒测试和兼容矩阵。三者认证、ID、Envelope与能力范围仍彼此独立，不能泛化为同一Contract。
+实现更新（2026-07-17）：DuckMail、YYDS Temporary Inbox与Cloudflare Temp Email匿名Inbox核心Adapter已分别在显式命名空间实现，具有独立Contract Fixture、黑盒测试和兼容矩阵。三者认证、ID、Envelope与能力范围仍彼此独立，不能泛化为同一Contract。
 
-状态：阶段性结论，等待完整Contract复核
+状态：历史研究结论（当前支持范围以`docs/compatibility/`及Contract Test为准）
 访问日期：2026-07-14
 
 ## 初步判断

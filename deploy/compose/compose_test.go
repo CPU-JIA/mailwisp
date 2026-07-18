@@ -15,7 +15,7 @@ func TestComposeProductionContract(t *testing.T) {
 		required  []string
 		forbidden []string
 	}{
-		{"compose.yaml", []string{"service_completed_successfully", "service_healthy", "POSTGRES_PASSWORD_FILE", "MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE", "create_quota_hmac_key", "postgres_data:/var/lib/postgresql", "content_data:/var/lib/mailwisp/content", "MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content", "maintenance:", "profiles: [\"maintenance\"]", "target: maintenance", "MAILWISP_BACKUP_ROOT_SOURCE", "internal: true", "smtp_ingress", "read_only: true", "no-new-privileges:true", "cap_drop:", "25:25", "80:80", "443:443"}, []string{"postgres_data:/var/lib/postgresql/data", "/var/lib/mailwisp/data", "backup-verifier:", "latest"}},
+		{"compose.yaml", []string{"service_completed_successfully", "service_healthy", "db-provision:", "postgres_owner_password", "postgres_app_password", "MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE", "create_quota_hmac_key", "postgres/provision-runtime-role.sh", "postgres_data:/var/lib/postgresql", "content_data:/var/lib/mailwisp/content", "MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content", "maintenance:", "profiles: [\"maintenance\"]", "target: maintenance", "MAILWISP_BACKUP_ROOT_SOURCE", "database:", "lmtp:", "internal: true", "smtp_ingress", "stop_grace_period", "max-size: \"10m\"", "max-file: \"3\"", "read_only: true", "no-new-privileges:true", "cap_drop:", "25:25", "80:80", "443:443"}, []string{"postgres_data:/var/lib/postgresql/data", "/var/lib/mailwisp/data", "backup-verifier:", "latest", "- backend", "docker-entrypoint-initdb.d"}},
 		{"release.compose.yaml", []string{"migrate:", "app:", "maintenance:", "edge:", "postfix:", "build: !reset null", "pull_policy: never"}, []string{"latest"}},
 		{"backup-verifier.compose.yaml", []string{"name: mailwisp-backup-verifier", "backup-verifier:", "target: maintenance", "MAILWISP_BACKUP_ROOT_SOURCE", ":/backups:ro", "network_mode: none", "read_only: true", "no-new-privileges:true", "cap_drop:"}, []string{"environment:", "env_file:", "secrets:", "depends_on:", "content_data", "networks:", "latest"}},
 		{"backup-verifier.release.compose.yaml", []string{"backup-verifier:", "build: !reset null", "pull_policy: never"}, []string{"latest"}},
@@ -23,32 +23,37 @@ func TestComposeProductionContract(t *testing.T) {
 		{"production-e2e.compose.yaml", []string{"ports: !override", "MAILWISP_E2E_HTTP_PORT", "MAILWISP_E2E_HTTPS_PORT", "MAILWISP_E2E_SMTP_PORT", "host_ip: 127.0.0.1", "MAILWISP_E2E_CERT_ROOT"}, []string{"0.0.0.0"}},
 		{"disaster-recovery.compose.yaml", []string{"volumes: !override", "content_data:/var/lib/mailwisp/content", "disaster_recovery_backup:/backups", "external: true", "MAILWISP_DR_BACKUP_VOLUME"}, []string{"0.0.0.0", "down --volumes", "/var/lib/mailwisp/data", "backup-verifier:"}},
 		{"disaster-recovery-verifier.compose.yaml", []string{"backup-verifier:", "volumes: !override", "disaster_recovery_backup:/backups:ro", "external: true", "MAILWISP_DR_BACKUP_VOLUME"}, []string{"0.0.0.0", "down --volumes", "content_data"}},
-		{"OPERATIONS.md", []string{"离线一致性备份", "backup-verifier", "Bundle完整性校验", "隔离恢复与切换", "--wait --wait-timeout 120", "重新签发", "恢复`25/tcp`放行", "不得删除或覆盖旧Volume", "版本升级与回滚", "禁止对已前向迁移", "最近一次灾备演练超过30天", "docker system prune"}, nil},
-		{"prometheus-alerts.example.yml", []string{"MailWispHTTP5xxBurst", "MailWispLMTPTemporaryFailures", "MailWispStorageAdmissionErrors", "MailWispParserFailures", "MailWispRetentionFailures", "MailWispPostgreSQLPoolSaturation", "mailwisp_postgres_pool_acquired / mailwisp_postgres_pool_max_connections"}, nil},
+		{"README.md", []string{"Docker Compose是MailWisp默认", "sh preflight.sh", "postgres_owner_password.txt", "postgres_app_password.txt", "chmod 0444", "目录保持`0700`", "Linux amd64", "Docker Compose版本", "json-file", "最多保留3个10 MiB", "Envelope Sender/Recipient", "Raw MIME"}, []string{"postgres_password.txt", "内部backend"}},
+		{"mailwisp.env.example", []string{"MAILWISP_HEAVY_READ_CONCURRENCY=4", "MAILWISP_PARSER_WORKERS=2", "MAILWISP_POSTGRES_MAX_CONNECTIONS=10"}, nil},
+		{"OPERATIONS.md", []string{"离线一致性备份", "backup-verifier", "Bundle完整性校验", "grep -Fq 'Mail queue is empty'", "Fail-closed备份门禁", "隔离恢复与切换", "--wait --wait-timeout 120", "重新签发", "恢复`25/tcp`放行", "不得删除或覆盖旧Volume", "版本升级与回滚", "禁止对已前向迁移", "最近一次灾备演练超过30天", "docker system prune"}, nil},
+		{"secrets/README.md", []string{"postgres_owner_password.txt", "postgres_app_password.txt", "browser_session_key.txt", "create_quota_hmac_key.txt", "chmod 0444", "父目录必须保持`0700`"}, []string{"postgres_password.txt", "chmod 0600"}},
+		{"prometheus-alerts.example.yml", []string{"MailWispHTTP5xxBurst", "MailWispLMTPTemporaryFailures", "MailWispStorageAdmissionErrors", "MailWispParserFailures", "MailWispRetentionFailures", "MailWispContentDeletionBacklog", "mailwisp_content_deletion_pending > 0", "MailWispPostgreSQLPoolSaturation", "mailwisp_postgres_pool_acquired / mailwisp_postgres_pool_max_connections"}, nil},
 		{"../../scripts/benchmark-compose.ps1", []string{"Save-BenchmarkDiagnostics", "Invoke-NativeWithRetry", "pinned PostgreSQL image pull", "Assert-LoopbackPortAvailable", "parser-drain.json", "down --volumes --remove-orphans"}, nil},
-		{"../../scripts/e2e-compose.ps1", []string{"Protect-E2EFixture", "chmod 0700", "fixture path escaped", "New-E2ECertificate", "Wait-HTTPSReady", "Assert-HTTPRedirect", "Wait-SMTPReady", "Save-E2EDiagnostics", "Assert-NoReparsePoint", "must be a subdirectory", "MAILWISP_DOCKER_COMPOSE", "ComposeFiles", "ImageTag", "MAILWISP_IMAGE_TAG", "down --volumes --remove-orphans", "Production E2E cleanup failed", "status = 'passed'", "npm run test:e2e:production"}, nil},
-		{"../../scripts/drill-compose-recovery.ps1", []string{"Protect-Fixture", "Assert-NoReparsePoint", "MAILWISP_DR_BACKUP_VOLUME", "mailwisp.managed=disaster-recovery-drill", "ps --all -q postgres", "npm run test:e2e:dr:seed", "stop edge postfix", "-Stopped", "backup-verifier backup verify /backups/recovery-bundle", "Assert-ComposeVolumeOwnership", "Assert-NoUnexpectedComposeVolumes", "redacted-test-address", "source volume destruction", "empty PostgreSQL inspection", "npm run test:e2e:dr:verify", "database_snapshot_match", "cleanup_resources_remaining", "down --volumes --remove-orphans"}, []string{"docker system prune", "docker volume prune"}},
+		{"../../scripts/e2e-compose.ps1", []string{"Protect-E2EFixture", "chmod 0700", "chmod 0444 E2E secrets", "fixture path escaped", "New-E2ECertificate", "Wait-HTTPSReady", "Assert-HTTPSSecurityHeaders", "Strict-Transport-Security", "Assert-HTTPRedirect", "Wait-SMTPReady", "address_verify_map", "address_verify_relay_transport", "PostgreSQL runtime role validation", "rolsuper", "has_schema_privilege", "Save-E2EDiagnostics", "Assert-NoReparsePoint", "must be a subdirectory", "MAILWISP_DOCKER_COMPOSE", "ComposeFiles", "ImageTag", "MAILWISP_IMAGE_TAG", "down --volumes --remove-orphans", "Production E2E cleanup failed", "status = 'passed'", "npm run test:e2e:production"}, nil},
+		{"../../scripts/drill-compose-recovery.ps1", []string{"Protect-Fixture", "Assert-NoReparsePoint", "MAILWISP_DR_BACKUP_VOLUME", "mailwisp.managed=disaster-recovery-drill", "ComposeFiles", "VerifierComposeFiles", "ImageTag", "MAILWISP_IMAGE_TAG", "ps --all -q postgres", "npm run test:e2e:dr:seed", "stop edge postfix", "-Stopped", "backup-verifier backup verify /backups/recovery-bundle", "Assert-ComposeVolumeOwnership", "Assert-NoUnexpectedComposeVolumes", "redacted-test-address", "source volume destruction", "empty PostgreSQL inspection", "npm run test:e2e:dr:verify", "database_snapshot_match", "cleanup_resources_remaining", "down --volumes --remove-orphans"}, []string{"docker system prune", "docker volume prune", "-U mailwisp -d"}},
 		{"../../scripts/verify.ps1", []string{"MAILWISP_PROMETHEUS_TOOL", "Prometheus alert rules syntax and PromQL validation", "--network none", "--read-only", "--user 65534:65534", "--entrypoint /bin/promtool", "check rules /rules.yml"}, nil},
 		{"../../web/playwright.disaster-recovery.config.ts", []string{"MAILWISP_DR_BASE_URL", "MAILWISP_DR_STATE_ROOT", "trace: 'off'", "video: 'off'", "screenshot: 'off'"}, nil},
 		{"../../scripts/install-compose-linux.sh", []string{"MAILWISP_DOCKER_COMPOSE", "MAILWISP_DOCKER_COMPOSE_LINUX_X86_64_SHA256", "mktemp", "sha256sum --check --strict", "install -m 0755", "docker compose version --short"}, []string{"latest"}},
 		{"../../scripts/install-buildx-linux.sh", []string{"MAILWISP_BUILDX", "MAILWISP_BUILDX_LINUX_AMD64_SHA256", "mktemp", "sha256sum --check --strict", "install -m 0755", "docker buildx version"}, []string{"latest"}},
+		{"preflight.sh", []string{"MAILWISP_DOCKER_COMPOSE", "docker compose version --short", "docker info --format", "linux/x86_64", "Linux amd64 Docker Engine", "does not match locked version"}, []string{"latest", "docker compose version >/dev/null"}},
 		{"../../.github/workflows/benchmark.yml", []string{"ubuntu-24.04", "./scripts/install-compose-linux.sh", "./scripts/benchmark-compose.ps1", "-Concurrency 1,4,16,32", "if: always()", "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"}, []string{"@main", "@v"}},
 		{"../../.github/workflows/release.yml", []string{"ubuntu-24.04", "install-buildx-linux.sh", "Run clean-checkout release verification gate", "Build first canonical release", "Build second canonical release", "cmp --silent", "Upload reproducibility failure evidence", "archive-byte-differences.txt", "image-digest-diff.txt", "release-reproducibility-${{ github.run_id }}-${{ github.run_attempt }}", "generate-release-sbom.ps1", "scan-release.ps1", "finalize-release.ps1", "verify-release.ps1", "-RunE2E", "Bind runtime verification evidence", "working-directory: artifacts/release/publish", "path: artifacts/release/publish", "sha256sum --check --strict SHA256SUMS", "Recalculate every downloaded release checksum", "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373", "subject-checksums: artifacts/release/publish/SHA256SUMS", "subject-path: artifacts/release/publish/SHA256SUMS", "-maxdepth 1", "subject_count", "MAILWISP_GITHUB_ATTESTATIONS_ENABLED", "Private releases require GitHub Enterprise Cloud Artifact Attestations", "gh release delete-asset", "gh release create", "--draft", "retention-days: 30"}, []string{"@main", "continue-on-error", "private-repository: true", "subject-checksums: artifacts/release/SHA256SUMS", "subject-path: artifacts/release/SHA256SUMS"}},
 		{"Dockerfile", []string{"# syntax=docker/dockerfile:1.20.0@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d", "golang:1.26.5-alpine3.24@sha256:", "node:22.20.0-alpine3.22@sha256:", "FROM scratch AS maintenance-packages", "postgresql18-client-18.4-r0.apk", "apk --no-network --repositories-file /dev/null add", "nginx:1.30.4-alpine@sha256:59d10bca5c674965ef4ff884715000dd60ef5567c36663523f108eec8e4105d4", "security-headers.conf", "USER 65532:65532", "npm@11.15.0", "npm ci", "mailwisp/internal/buildinfo.version", "org.opencontainers.image.version", "org.opencontainers.image.revision", "org.opencontainers.image.created", "-trimpath"}, []string{"# syntax=docker/dockerfile:1.20.0\n", "apk add", "latest"}},
 		{"versions.lock", []string{"MAILWISP_NPM=11.15.0", "MAILWISP_DOCKERFILE_FRONTEND=docker/dockerfile:1.20.0@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d", "MAILWISP_DOCKER_COMPOSE=5.2.0", "MAILWISP_DOCKER_COMPOSE_LINUX_X86_64_SHA256=018f9612ecabc5f2d7aaa53d6f5f44453a87611e2d72c8ef84d7b1eca070e719", "MAILWISP_BUILDX=0.35.0", "MAILWISP_BUILDX_LINUX_AMD64_SHA256=d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda", "MAILWISP_BUILDKIT_VERSION=0.31.2", "MAILWISP_BUILDKIT_IMAGE=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec", "MAILWISP_POSTGRES=postgres:18.4-alpine@sha256:", "MAILWISP_POSTGRESQL_CLIENT_PACKAGE=18.4-r0", "MAILWISP_PROMETHEUS_TOOL=prom/prometheus:v3.13.1@sha256:3c42b892cf723fa54d2f262c37a0e1f80aa8c8ddb1da7b9b0df9455a35a7f893", "MAILWISP_SYFT=1.48.0", "MAILWISP_TRIVY=0.72.0", "MAILWISP_POSTFIX_PACKAGE=3.11.5-r0"}, []string{"latest"}},
 		{"../../.dockerignore", []string{".git", "web/node_modules", "deploy/compose/secrets"}, nil},
 		{"postfix/Dockerfile", []string{"FROM scratch AS postfix-packages", "ADD --checksum=sha256:", "postfix-3.11.5-r0.apk", "ca-certificates-20260611-r0.apk", "alpine:3.24.1@sha256:", "apk --no-network --repositories-file /dev/null add", "org.opencontainers.image.version", "org.opencontainers.image.revision", "org.opencontainers.image.created", "--chmod=0755"}, []string{"apk add --no-cache", "latest"}},
-		{"postfix/entrypoint.sh", []string{"reject_unauth_destination", "smtpd_tls_protocols = >=TLSv1.2", "postfix check", "relay_transport = lmtp:inet:app:2525", "alias_maps ="}, []string{"transport_maps = hash:", "postmap"}},
+		{"postfix/entrypoint.sh", []string{"reject_unauth_destination, reject_unverified_recipient", "address_verify_relay_transport = lmtp:inet:app:2525", "address_verify_map = lmdb:$data_directory/verify_cache", "address_verify_positive_expire_time = 2s", "address_verify_negative_expire_time = 2s", "address_verify_poll_delay = 1s", "address_verify_poll_count = 3", "unverified_recipient_reject_code = 550", "MAILWISP_LMTP_MAX_MESSAGE_BYTES", "smtpd_tls_protocols = >=TLSv1.2", "postfix check", "relay_transport = lmtp:inet:app:2525", "alias_maps ="}, []string{"address_verify_transport =", "address_verify_map = btree:", "address_verify_poll_delay = 100ms", "transport_maps = hash:", "postmap", "message_size_limit = 26214400"}},
+		{"postgres/provision-runtime-role.sh", []string{"CREATE ROLE mailwisp_app", "ALTER ROLE mailwisp_app", "NOSUPERUSER", "NOCREATEDB", "NOCREATEROLE", "NOINHERIT", "NOREPLICATION", "NOBYPASSRLS", "REVOKE ALL ON DATABASE", "REVOKE ALL ON SCHEMA public FROM PUBLIC", "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES", "ALTER DEFAULT PRIVILEGES FOR ROLE mailwisp_owner"}, nil},
 		{"nginx/default.conf.template", []string{"ssl_protocols TLSv1.2 TLSv1.3", "include /etc/nginx/snippets/mailwisp-security-headers.conf", "proxy_pass http://app:8080", "limit_req zone=mailwisp_create", "api|compat|open_api|user_api", "location = /metrics", "return 404"}, nil},
 		{"nginx/security-headers.conf", []string{"Content-Security-Policy", "X-Content-Type-Options", "Cross-Origin-Opener-Policy", "always"}, nil},
 		{"../../.github/workflows/verify.yml", []string{"./scripts/install-compose-linux.sh", "if: always()", "production-e2e-${{ github.run_id }}-${{ github.run_attempt }}", "artifacts/production-e2e/result.json", "disaster-recovery-${{ github.run_id }}-${{ github.run_attempt }}", "artifacts/disaster-recovery/result.json", "web/playwright-production-report", "web/test-results-production"}, nil},
-		{"../../scripts/build-release.ps1", []string{"AllowDirty", "SOURCE_DATE_EPOCH", "MAILWISP_BUILDX", "MAILWISP_BUILDKIT_IMAGE", "isolated release builder", "--no-cache", "type=docker,dest=$targetImageArchive,rewrite-timestamp=true", "type=docker,dest=$postfixImageArchive,rewrite-timestamp=true", "mailwisp-app-linux-amd64.tar", "mailwisp-maintenance-linux-amd64.tar", "mailwisp-edge-linux-amd64.tar", "mailwisp-postfix-linux-amd64.tar", "reproducible image load", "image_archives = $buildImageArchives", "image_timestamp_rewrite = $true", "mailwisp/internal/buildinfo.version", "--provenance=false", "release.json", "SHA256SUMS", "OPERATIONS.md", "prometheus-alerts.example.yml", "release.compose.yaml", "backup-verifier.compose.yaml", "backup-verifier.release.compose.yaml", "COMPOSE_FILE=compose.yaml:release.compose.yaml", "--sort=name", "gzip -n"}, []string{"'--load'", "docker save", "mailwisp-images-linux-amd64.tar"}},
+		{"../../scripts/build-release.ps1", []string{"AllowDirty", "SOURCE_DATE_EPOCH", "MAILWISP_BUILDX", "MAILWISP_BUILDKIT_IMAGE", "isolated release builder", "--no-cache", "type=docker,dest=$targetImageArchive,rewrite-timestamp=true", "type=docker,dest=$postfixImageArchive,rewrite-timestamp=true", "mailwisp-app-linux-amd64.tar", "mailwisp-maintenance-linux-amd64.tar", "mailwisp-edge-linux-amd64.tar", "mailwisp-postfix-linux-amd64.tar", "reproducible image load", "image_archives = $buildImageArchives", "image_timestamp_rewrite = $true", "mailwisp/internal/buildinfo.version", "--provenance=false", "release.json", "SHA256SUMS", "OPERATIONS.md", "prometheus-alerts.example.yml", "preflight.sh", "release.compose.yaml", "backup-verifier.compose.yaml", "backup-verifier.release.compose.yaml", "'postgres'", "artifacts/release-dr", "COMPOSE_FILE=compose.yaml:release.compose.yaml", "--sort=name", "gzip -n"}, []string{"'--load'", "docker save", "mailwisp-images-linux-amd64.tar"}},
 		{"../../scripts/generate-release-sbom.ps1", []string{"MAILWISP_SYFT", "SPDX-2.3", "Git worktree status", "git -C $repositoryRoot archive", "committed source snapshot", "source SPDX SBOM generation", "binary SPDX SBOM generation", "image SPDX SBOM generation", "sbom-index.json"}, []string{"scan \"dir:$repositoryRoot\""}},
 		{"../../scripts/scan-release.ps1", []string{"MAILWISP_TRIVY", "--download-db-only", "max_database_age_hours = 48", "image vulnerability scan", "Metadata.ImageID", "release IaC misconfiguration scan", "--ignorefile", ".trivyignore.yaml", "accepted_risks", "ignore_unfixed = $false", "allowed_findings = 0", "security-index.json"}, []string{"--ignore-unfixed"}},
 		{"../../.trivyignore.yaml", []string{"misconfigurations:", "id: AVD-DS-0002", "deploy/compose/postfix/Dockerfile", "expired_at: 2027-01-17", "Postfix master must start as root", "Re-evaluate before the expiry date"}, []string{"vulnerabilities:", "deploy/compose/Dockerfile"}},
-		{"../../scripts/finalize-release.ps1", []string{"release-evidence.json", "publish", "HashSet[string]", "OrdinalIgnoreCase", "Release publish asset name is empty, reserved or duplicated", "SHA256SUMS", "blocking_findings", "git_dirty", "image_timestamp_rewrite", "deterministic timestamp rewriting", "expectedImageArchives", "image_archive_count", "release-verification.json", "production-e2e.json", "source_builds_remaining", "verification = $verificationEvidence"}, nil},
+		{"../../scripts/finalize-release.ps1", []string{"release-evidence.json", "publish", "HashSet[string]", "OrdinalIgnoreCase", "Release publish asset name is empty, reserved or duplicated", "SHA256SUMS", "blocking_findings", "git_dirty", "image_timestamp_rewrite", "deterministic timestamp rewriting", "expectedImageArchives", "image_archive_count", "release-verification.json", "production-e2e.json", "disaster-recovery.json", "source_builds_remaining", "database_snapshot_match", "content_catalog_and_digest_match", "verification = $verificationEvidence"}, nil},
 		{"../../scripts/release-artifacts.ps1", []string{"Assert-MailWispArtifactPath", "Artifact path escaped", "symbolic link or junction", "Remove-MailWispArtifactDirectory"}, nil},
-		{"../../scripts/verify-release.ps1", []string{"Assert-BuildOutput", "Assert-ChecksumManifest", "publish", "-Root $publishRoot -Manifest $outerChecksums -RequireComplete", "archive path validation", "archive metadata listing", "duplicate entry", "symbolic link or reparse point", "image_archives", "load $($property.Name) release image archive", "did not disable remote pulls", "Release Compose retained a source build", "prebuilt release production E2E", "source_builds_remaining = 0"}, []string{"mailwisp-images-linux-amd64.tar"}},
+		{"../../scripts/verify-release.ps1", []string{"Assert-BuildOutput", "Assert-ChecksumManifest", "publish", "-Root $publishRoot -Manifest $outerChecksums -RequireComplete", "archive path validation", "archive metadata listing", "duplicate entry", "symbolic link or reparse point", "image_archives", "load $($property.Name) release image archive", "did not disable remote pulls", "Release Compose retained a source build", "prebuilt release production E2E", "prebuilt release disaster recovery", "VerifierComposeFiles", "database_snapshot_match", "content_catalog_and_digest_match", "source_builds_remaining = 0"}, []string{"mailwisp-images-linux-amd64.tar"}},
 		{"../../docs/release-bundle.md", []string{"Canonical Docker Compose部署", "docker load", "--no-build", "Artifact Attestation", "Fail Closed", "SPDX 2.3", "回滚"}, nil},
 	}
 	for _, test := range tests {
@@ -69,6 +74,39 @@ func TestComposeProductionContract(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestComposeDatabaseCredentialsAreScopedByService(t *testing.T) {
+	content, err := os.ReadFile("compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	provisionStart := strings.Index(text, "\n  db-provision:\n")
+	migrateStart := strings.Index(text, "\n  migrate:\n")
+	appStart := strings.Index(text, "\n  app:\n")
+	maintenanceStart := strings.Index(text, "\n  maintenance:\n")
+	if provisionStart < 0 || migrateStart <= provisionStart || appStart <= migrateStart || maintenanceStart <= appStart {
+		t.Fatal("compose service boundaries are missing or out of order")
+	}
+	provision := text[provisionStart:migrateStart]
+	migrate := text[migrateStart:appStart]
+	app := text[appStart:maintenanceStart]
+	if !strings.Contains(provision, "postgres_owner_password") || !strings.Contains(provision, "postgres_app_password") ||
+		strings.Contains(provision, "browser_session_key") || strings.Contains(provision, "create_quota_hmac_key") {
+		t.Error("db-provision service credential scope is invalid")
+	}
+	for _, forbidden := range []string{"postgres_app_password", "browser_session_key\n", "create_quota_hmac_key"} {
+		if strings.Contains(migrate, forbidden) {
+			t.Errorf("migrate service receives runtime secret %q", forbidden)
+		}
+	}
+	if !strings.Contains(migrate, "postgres_owner_password") || !strings.Contains(migrate, "MAILWISP_BROWSER_SESSION_KEY_FILE: \"\"") {
+		t.Error("migrate service does not explicitly use only the owner credential")
+	}
+	if strings.Contains(app, "postgres_owner_password") || !strings.Contains(app, "postgres_app_password") {
+		t.Error("app service database credential scope is invalid")
 	}
 }
 
@@ -278,18 +316,31 @@ func TestComposeSMTPIngressIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")
-	postgres := composeServiceBlock(t, text, "postgres", "migrate")
-	postfix := composeServiceBlock(t, text, "postfix", "certbot")
-	if strings.Contains(postgres, "smtp_ingress") {
-		t.Fatal("postgres must not join the public SMTP ingress network")
+	blocks := map[string]string{
+		"postgres":     composeServiceBlock(t, text, "postgres", "db-provision"),
+		"db-provision": composeServiceBlock(t, text, "db-provision", "migrate"),
+		"migrate":      composeServiceBlock(t, text, "migrate", "app"),
+		"app":          composeServiceBlock(t, text, "app", "maintenance"),
+		"maintenance":  composeServiceBlock(t, text, "maintenance", "edge"),
+		"edge":         composeServiceBlock(t, text, "edge", "postfix"),
+		"postfix":      composeServiceBlock(t, text, "postfix", "certbot"),
+		"certbot":      composeServiceBlock(t, text, "certbot", "secrets"),
 	}
-	for _, network := range []string{"- backend", "- smtp_ingress"} {
-		if !strings.Contains(postfix, network) {
-			t.Fatalf("postfix block missing %q", network)
+	expected := map[string][]string{
+		"postgres": {"database"}, "db-provision": {"database"}, "migrate": {"database"}, "app": {"database", "lmtp", "frontend"},
+		"maintenance": {"database"}, "edge": {"frontend"}, "postfix": {"lmtp", "smtp_ingress"}, "certbot": {"frontend"},
+	}
+	for service, block := range blocks {
+		for _, network := range []string{"database", "lmtp", "frontend", "smtp_ingress"} {
+			got := strings.Contains(block, "- "+network)
+			want := slices.Contains(expected[service], network)
+			if got != want {
+				t.Errorf("service %s membership in %s = %t, want %t", service, network, got, want)
+			}
 		}
 	}
-	if !strings.Contains(text, "networks:\n  backend:\n    internal: true\n  frontend:\n  smtp_ingress:\n") {
-		t.Fatal("backend must remain internal while smtp_ingress remains independently publishable")
+	if !strings.Contains(text, "networks:\n  database:\n    internal: true\n  lmtp:\n    internal: true\n  frontend:\n  smtp_ingress:\n") {
+		t.Fatal("database and LMTP networks must be internal and separated from public ingress networks")
 	}
 }
 
@@ -300,7 +351,7 @@ func TestComposeMaintenanceAndVerifierLeastPrivilege(t *testing.T) {
 	}
 	text := strings.ReplaceAll(string(content), "\r\n", "\n")
 	maintenance := composeServiceBlock(t, text, "maintenance", "edge")
-	for _, required := range []string{"postgres_password", "content_data:/var/lib/mailwisp/content", ":/backups"} {
+	for _, required := range []string{"postgres_owner_password", "content_data:/var/lib/mailwisp/content", ":/backups"} {
 		if !strings.Contains(maintenance, required) {
 			t.Fatalf("maintenance block missing %q", required)
 		}
@@ -332,6 +383,9 @@ func composeServiceBlock(t *testing.T, content, service, nextService string) str
 	t.Helper()
 	startMarker := "\n  " + service + ":\n"
 	endMarker := "\n  " + nextService + ":\n"
+	if nextService == "secrets" {
+		endMarker = "\nsecrets:\n"
+	}
 	start := strings.Index(content, startMarker)
 	end := strings.Index(content, endMarker)
 	if start < 0 || end < 0 || end <= start {

@@ -5,7 +5,7 @@ export type Locale = 'zh-CN' | 'en-US'
 export const messages = {
   'zh-CN': {
     brand: { tagline: '来信即现，过时即逝。' },
-    nav: { language: '语言', theme: '主题' },
+    nav: { preferences: '显示偏好', language: '语言', theme: '主题' },
     theme: { system: '跟随系统', light: '浅色', dark: '深色', mist: '雾色' },
     welcome: {
       eyebrow: '临时收件，不留拖累',
@@ -27,6 +27,7 @@ export const messages = {
       copyAddress: '复制邮箱地址',
       copyToken: '复制访问令牌',
       copied: '已复制',
+      copyFailed: '复制失败，请手动复制',
       continue: '我已保存，进入收件箱',
       warning: '任何拿到此令牌的人都能读取并删除这个邮箱。不要发到聊天记录、Issue 或 URL 中。',
     },
@@ -40,6 +41,7 @@ export const messages = {
       emptyTitle: '风还没有带来新消息',
       emptyBody: '把上方地址用于注册或验证码接收。新邮件会在这里出现。',
       signOut: '离开邮箱',
+      leaving: '正在安全离开…',
       delete: '永久删除邮箱',
       deleteConfirm: '再次点击，确认永久删除',
       pending: '正在解析',
@@ -53,13 +55,18 @@ export const messages = {
     message: {
       back: '返回来信列表',
       delete: '删除这封邮件',
+      deleteConfirm: '再次点击，确认删除邮件',
       text: '纯文本',
       html: '安全 HTML',
+      contentViews: '邮件正文格式',
+      htmlFrameTitle: '安全 HTML 邮件：{subject}',
       htmlUnavailable: '这封邮件没有 HTML 内容。',
       attachments: '附件',
       download: '下载',
+      downloadSource: '下载原始邮件',
       privacy: '已验证的内嵌图片会在本地显示；远程图片、脚本、表单和外部网络请求仍被阻止。',
       parsePending: '邮件正在解析，稍后刷新即可查看正文。',
+      parseFailed: '这封邮件无法安全解析，但原始RFC 822邮件仍可下载检查。',
     },
     error: {
       title: '这阵风没能抵达',
@@ -77,7 +84,7 @@ export const messages = {
   },
   'en-US': {
     brand: { tagline: 'Fast mail. Zero trace.' },
-    nav: { language: 'Language', theme: 'Theme' },
+    nav: { preferences: 'Display preferences', language: 'Language', theme: 'Theme' },
     theme: { system: 'System', light: 'Light', dark: 'Dark', mist: 'Mist' },
     welcome: {
       eyebrow: 'Temporary inbox, lasting calm',
@@ -99,20 +106,21 @@ export const messages = {
       copyAddress: 'Copy inbox address',
       copyToken: 'Copy access token',
       copied: 'Copied',
+      copyFailed: 'Copy failed — copy it manually',
       continue: 'Saved — open inbox',
       warning: 'Anyone with this token can read and delete the inbox. Never place it in chats, issues, or URLs.',
     },
     inbox: {
       label: 'Current inbox', copy: 'Copy address', refresh: 'Refresh messages', refreshing: 'Refreshing…', expires: 'Expires', messages: 'Messages',
       emptyTitle: 'No message has arrived on the wind', emptyBody: 'Use the address above for a sign-up or verification code. New mail will appear here.',
-      signOut: 'Leave inbox', delete: 'Delete inbox permanently', deleteConfirm: 'Click again to delete permanently', pending: 'Parsing', failed: 'Parse failed',
+      signOut: 'Leave inbox', leaving: 'Leaving securely…', delete: 'Delete inbox permanently', deleteConfirm: 'Click again to delete permanently', pending: 'Parsing', failed: 'Parse failed',
       unknownSender: 'Unknown sender', noSubject: '(No subject)',
       loadMore: 'Load earlier messages', loadingMore: 'Loading earlier messages…', loadMoreError: 'Earlier messages could not be loaded yet.',
     },
     message: {
-      back: 'Back to messages', delete: 'Delete this message', text: 'Plain text', html: 'Safe HTML', htmlUnavailable: 'This message has no HTML content.',
-      attachments: 'Attachments', download: 'Download', privacy: 'Verified inline images are rendered locally; remote images, scripts, forms, and external network requests remain blocked.',
-      parsePending: 'This message is still being parsed. Refresh in a moment to view its content.',
+      back: 'Back to messages', delete: 'Delete this message', deleteConfirm: 'Click again to delete this message', text: 'Plain text', html: 'Safe HTML', contentViews: 'Message content format', htmlFrameTitle: 'Safe HTML message: {subject}', htmlUnavailable: 'This message has no HTML content.',
+      attachments: 'Attachments', download: 'Download', downloadSource: 'Download raw message', privacy: 'Verified inline images are rendered locally; remote images, scripts, forms, and external network requests remain blocked.',
+      parsePending: 'This message is still being parsed. Refresh in a moment to view its content.', parseFailed: 'This message could not be parsed safely, but its raw RFC 822 source is still available for inspection.',
     },
     error: {
       title: 'This wisp did not arrive', retry: 'Try again', network_error: 'MailWisp could not be reached. Check your connection and try again.',
