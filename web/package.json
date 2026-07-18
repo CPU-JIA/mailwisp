@@ -19,13 +19,15 @@
     "test:e2e:dr:verify": "playwright test --config playwright.disaster-recovery.config.ts verify.spec.ts"
   },
   "dependencies": {
+    "@lucide/vue": "1.25.0",
     "dompurify": "3.4.12",
     "vue": "3.5.39",
     "vue-i18n": "11.4.6"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "6.0.7",
+    "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.61.1",
+    "@vitejs/plugin-vue": "6.0.7",
     "happy-dom": "20.10.6",
     "oxlint": "1.74.0",
     "typescript": "6.0.3",

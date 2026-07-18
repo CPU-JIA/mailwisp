@@ -1,4 +1,10 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function openInboxWithToken(page: Page, token: string): Promise<void> {
+  await page.getByRole('tab', { name: '访问令牌' }).click()
+  await page.locator('#capability-token').fill(token)
+  await page.getByRole('button', { name: '打开收件箱' }).click()
+}
 
 test('renders the Chinese welcome screen and switches language/theme', async ({ page }) => {
   await page.route('**/api/v1/session', async (route) => {
@@ -6,9 +12,23 @@ test('renders the Chinese welcome screen and switches language/theme', async ({ 
   })
   await page.goto('/')
   await expect(page).toHaveTitle('MailWisp')
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('给下一封陌生来信')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('临时邮箱')
+  await expect(page.locator('#capability-token')).toHaveCount(0)
+  for (const select of await page.locator('.utility-select').all()) {
+    const controlBox = await select.boundingBox()
+    const selectBox = await select.locator('select').boundingBox()
+    expect(controlBox).not.toBeNull()
+    expect(selectBox).not.toBeNull()
+    expect(selectBox?.width).toBeCloseTo(controlBox?.width ?? 0, 0)
+    expect(selectBox?.height).toBeCloseTo(controlBox?.height ?? 0, 0)
+  }
+  const createTab = page.getByRole('tab', { name: '新建邮箱' })
+  await createTab.focus()
+  await createTab.press('ArrowRight')
+  await expect(page.getByRole('tab', { name: '访问令牌' })).toBeFocused()
+  await expect(page.locator('#capability-token')).toBeVisible()
   await page.locator('select').first().selectOption('en-US')
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('Give the next unknown message')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Temporary inbox')
   await page.locator('select').nth(1).selectOption('mist')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'mist')
   await expect(page.locator('body')).not.toContainText('undefined')
@@ -33,6 +53,37 @@ test('does not let a late session restore overwrite a user-created inbox', async
   await page.waitForTimeout(2_200)
   await expect(page.getByText('created@example.com')).toBeVisible()
   await expect(page.getByText('stale@example.com')).toHaveCount(0)
+})
+
+test('restores the same browser session after a full page reload', async ({ page }) => {
+  const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb20', address: 'reload-proof@mailwisp.local', status: 'active', expires_at: '2026-07-17T00:00:00Z', created_at: '2026-07-16T00:00:00Z' }
+  let sessionIssued = false
+  await page.route('**/api/v1/session', async (route) => {
+    const request = route.request()
+    if (request.method() === 'POST') {
+      sessionIssued = true
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'reload-csrf' } }) })
+      return
+    }
+    if (request.method() === 'GET' && sessionIssued) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'reload-csrf' } }) })
+      return
+    }
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unauthenticated', message: 'no session', request_id: 'reload' } }) })
+  })
+  await page.route('**/api/v1/inboxes', async (route) => {
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, capability: { token: 'wisp_cap_v1_reload', expires_at: inbox.expires_at, scopes: ['inbox:read'] } } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: '创建临时邮箱' }).click()
+  await page.getByRole('button', { name: '我已保存，进入收件箱' }).click()
+  await expect(page.getByRole('heading', { name: inbox.address })).toBeVisible()
+  await page.reload()
+  await expect(page.getByRole('heading', { name: inbox.address })).toBeVisible()
+  expect(sessionIssued).toBe(true)
 })
 
 test('downloads an owned attachment from message detail', async ({ page }) => {
@@ -66,9 +117,10 @@ test('downloads an owned attachment from message detail', async ({ page }) => {
     await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from([137, 80, 78, 71]) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_test')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_test')
   await page.getByRole('button', { name: /Attachment/ }).click()
+  await expect(page.locator('.inbox-pane')).toBeVisible()
+  await expect(page.locator('.message-pane')).toBeVisible()
   await expect.poll(() => seenUpdates).toBe(1)
   const textTab = page.getByRole('tab', { name: '纯文本' })
   const htmlTab = page.getByRole('tab', { name: '安全 HTML' })
@@ -108,8 +160,7 @@ test('keeps terminal parse failures inspectable through an owned Raw Source down
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...summary, header_message_id: '', from: [], to: [], cc: [], sent_at: null, text: '', html_source: '', attachments: [], warnings: [] } }) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_failed')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_failed')
   await page.locator('.message-row').click()
   await expect(page.getByText('这封邮件无法安全解析，但原始RFC 822邮件仍可下载检查。')).toBeVisible()
   await expect(page.getByText('邮件正在解析，稍后刷新即可查看正文。')).toHaveCount(0)
@@ -148,8 +199,7 @@ test('loads every cursor page without replacing newer messages', async ({ page }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_test')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_test')
   await expect(page.getByRole('button', { name: /Newest page/ })).toBeVisible()
   await page.getByRole('button', { name: '加载更早来信' }).click()
   await expect(page.getByRole('button', { name: /Newest page/ })).toHaveCount(1)
@@ -188,8 +238,7 @@ test('keeps cursor pagination retryable after a transient failure', async ({ pag
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [older], pagination: { next_cursor: '' } }) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_test')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_test')
   await page.getByRole('button', { name: '加载更早来信' }).click()
   await expect(page.getByText('更早的来信暂时没有加载成功。')).toBeVisible()
   await page.getByRole('button', { name: '加载更早来信' }).click()
@@ -225,8 +274,7 @@ test('does not restart inbox polling after load-more is aborted by message detai
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...summary, header_message_id: '', from: [], to: [], cc: [], sent_at: null, text: 'body', html_source: '', attachments: [], warnings: [] } }) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_test')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_test')
   await page.getByRole('button', { name: '加载更早来信' }).click()
   await expect.poll(() => listRequests).toBe(2)
   await page.getByRole('button', { name: /Open during pagination/ }).click()
@@ -259,8 +307,7 @@ test('waits for server-confirmed session deletion before leaving the inbox', asy
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_logout')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_logout')
   await expect(page.getByRole('heading', { name: inbox.address })).toBeVisible()
   await page.getByRole('button', { name: '离开邮箱' }).click()
   await expect.poll(() => deleteStarted).toBe(true)
@@ -296,8 +343,7 @@ test('keeps a failed session logout recoverable without pretending it succeeded'
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
   })
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_retry_logout')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_retry_logout')
   await page.getByRole('button', { name: '离开邮箱' }).click()
   await expect(page.getByRole('heading', { name: '服务器暂时无法完成请求。请稍后再试。' })).toBeVisible()
   await expect(page.getByRole('button', { name: '创建临时邮箱' })).toHaveCount(0)
@@ -326,11 +372,15 @@ test('keeps untrusted long message text inside a narrow viewport', async ({ page
   })
 
   await page.goto('/')
-  await page.locator('#capability-token').fill('wisp_cap_v1_long_text')
-  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await openInboxWithToken(page, 'wisp_cap_v1_long_text')
   await expect(page.locator('.message-row')).toBeVisible()
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
   await page.locator('.message-row').click()
+  await expect(page.locator('.inbox-pane')).toBeHidden()
+  await expect(page.locator('.message-pane')).toBeVisible()
   await expect(page.locator('.attachments')).toBeVisible()
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  await page.getByRole('button', { name: '返回来信列表' }).click()
+  await expect(page.locator('.inbox-pane')).toBeVisible()
+  await expect(page.locator('.message-pane')).toBeHidden()
 })
