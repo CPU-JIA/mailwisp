@@ -4,7 +4,7 @@
 
 ## 1. 产品与边界
 
-MailWisp 是面向自托管个人服务器的生产级临时邮箱服务。
+MailWisp 是面向自托管个人服务器的生产级邮件工作台；临时邮箱是其中一个有界的匿名收件 Profile，长期收件、长期收发和第三方 Adapter 按 ADR 0024 演进。
 
 > Fast mail. Zero trace.
 > 来信即现，过时即逝。
@@ -98,7 +98,7 @@ docs/decisions/        已接受架构决策
 - 已进入共享历史的 Migration 不可修改，只能新增单调版本。
 - 运行二进制要求数据库 Schema 精确等于 `migrations.LatestVersion`。
 - 破坏性变更必须有备份恢复与前一受支持版本验证。
-- Inbox 永久到期被禁止；删除数据库引用时必须原子生成持久 Content Deletion Task。
+- `temporary` 与兼容匿名 Inbox 禁止永久有效；Owner 的 `persistent_receive` / `persistent_full` 可以无固定到期，但必须受保留、容量、删除和备份策略约束。删除数据库引用时必须原子生成持久 Content Deletion Task。
 - 文件删除失败必须可重试；删除前在生命周期 Fence 内重新核对数据库引用，并用 Generation 防止旧确认吞掉新任务。
 - Reconcile、Backup、Restore 和一次性 Cleanup 必须取得独占维护租约。
 
