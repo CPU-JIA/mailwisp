@@ -40,6 +40,12 @@ type ContentRef struct {
 	SizeBytes int64
 }
 
+// ContentDeletion identifies one durable, generation-checked physical deletion task.
+type ContentDeletion struct {
+	Content    ContentRef
+	Generation int64
+}
+
 // Delivery describes one durably stored SMTP payload delivered to one or more inboxes.
 type Delivery struct {
 	Content        ContentRef

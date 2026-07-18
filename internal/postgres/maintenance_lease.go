@@ -16,20 +16,20 @@ const (
 )
 
 var (
-	// ErrServiceActive indicates that at least one MailWisp serve process holds
-	// the shared lease that protects active deliveries.
+	// ErrServiceActive indicates that one MailWisp serve or maintenance process
+	// already owns the singleton content lifecycle lease.
 	ErrServiceActive = errors.New("mailwisp service is active")
 )
 
 // MaintenanceLease owns one session-level PostgreSQL advisory lock.
 type MaintenanceLease struct {
-	mutex  sync.Mutex
-	conn   *pgx.Conn
-	shared bool
+	mutex sync.Mutex
+	conn  *pgx.Conn
 }
 
-// AcquireServiceLease obtains a shared lease for the complete serve lifetime.
-// Multiple serve processes may coexist, while exclusive maintenance is blocked.
+// AcquireServiceLease obtains the singleton application lease for the complete
+// serve lifetime. The filesystem content profile deliberately permits one Go
+// process with bounded internal concurrency, not multiple replicas.
 func AcquireServiceLease(ctx context.Context, dsn string) (*MaintenanceLease, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("postgres DSN is required")
@@ -38,10 +38,14 @@ func AcquireServiceLease(ctx context.Context, dsn string) (*MaintenanceLease, er
 	if err != nil {
 		return nil, fmt.Errorf("acquire service lease connection: %w", err)
 	}
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock_shared($1, $2)", maintenanceLockClass, maintenanceLockObject); err != nil {
+	var acquired bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1, $2)", maintenanceLockClass, maintenanceLockObject).Scan(&acquired); err != nil {
 		return nil, errors.Join(fmt.Errorf("acquire service lease: %w", err), conn.Close(context.Background()))
 	}
-	return &MaintenanceLease{conn: conn, shared: true}, nil
+	if !acquired {
+		return nil, errors.Join(ErrServiceActive, conn.Close(context.Background()))
+	}
+	return &MaintenanceLease{conn: conn}, nil
 }
 
 // TryAcquireMaintenanceLease obtains an exclusive lease without waiting for
@@ -76,12 +80,8 @@ func (l *MaintenanceLease) Release(ctx context.Context) error {
 		return nil
 	}
 
-	query := "SELECT pg_advisory_unlock($1, $2)"
-	if l.shared {
-		query = "SELECT pg_advisory_unlock_shared($1, $2)"
-	}
 	var unlocked bool
-	err := l.conn.QueryRow(ctx, query, maintenanceLockClass, maintenanceLockObject).Scan(&unlocked)
+	err := l.conn.QueryRow(ctx, "SELECT pg_advisory_unlock($1, $2)", maintenanceLockClass, maintenanceLockObject).Scan(&unlocked)
 	connection := l.conn
 	l.conn = nil
 	closeErr := connection.Close(ctx)

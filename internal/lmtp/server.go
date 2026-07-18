@@ -138,14 +138,14 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 					defer s.metrics.LMTPSessionClosed()
 				}
 				if err := s.serveConnection(ctx, connection); err != nil && ctx.Err() == nil {
-					s.logger.Warn("LMTP session ended with error", "remote_addr", connection.RemoteAddr().String(), "error", err)
+					s.logger.Warn("LMTP session ended with error", "error", err)
 				}
 			}()
 		default:
 			if s.metrics != nil {
 				s.metrics.LMTPSessionRejected()
 			}
-			s.logger.Warn("LMTP session rejected by concurrency limit", "remote_addr", connection.RemoteAddr().String())
+			s.logger.Warn("LMTP session rejected by concurrency limit")
 			_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
 			_, _ = io.WriteString(connection, "421 4.3.2 Too many LMTP sessions\r\n")
 			_ = connection.Close()

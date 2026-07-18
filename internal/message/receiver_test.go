@@ -23,6 +23,7 @@ func TestReceiverStoresContentBeforeMetadata(t *testing.T) {
 			}
 			return ContentRef{Key: testContentKey, SizeBytes: int64(len(content))}, nil
 		},
+		release: func() { steps = append(steps, "release") },
 	}
 	repository := &repositoryStub{
 		commit: func(_ context.Context, delivery Delivery) ([]StoredMessage, error) {
@@ -47,8 +48,8 @@ func TestReceiverStoresContentBeforeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Receive() error = %v", err)
 	}
-	if len(steps) != 2 || steps[0] != "content" || steps[1] != "metadata" {
-		t.Fatalf("Receive() steps = %v, want [content metadata]", steps)
+	if len(steps) != 3 || steps[0] != "content" || steps[1] != "metadata" || steps[2] != "release" {
+		t.Fatalf("Receive() steps = %v, want [content metadata release]", steps)
 	}
 	if receipt.Content.SizeBytes != int64(len("raw message")) || len(receipt.Messages) != 1 {
 		t.Fatalf("Receive() receipt = %+v", receipt)
@@ -146,8 +147,9 @@ func validRequest(inboxID InboxID) ReceiveRequest {
 }
 
 type contentStoreStub struct {
-	check func(context.Context) error
-	put   func(context.Context, io.Reader) (ContentRef, error)
+	check   func(context.Context) error
+	put     func(context.Context, io.Reader) (ContentRef, error)
+	release func()
 }
 
 func (s *contentStoreStub) CheckCapacity(ctx context.Context) error {
@@ -157,11 +159,19 @@ func (s *contentStoreStub) CheckCapacity(ctx context.Context) error {
 	return s.check(ctx)
 }
 
-func (s *contentStoreStub) Put(ctx context.Context, source io.Reader) (ContentRef, error) {
+func (s *contentStoreStub) PutLeased(ctx context.Context, source io.Reader) (ContentRef, func(), error) {
 	if s.put == nil {
-		return ContentRef{}, errors.New("unexpected content store call")
+		return ContentRef{}, nil, errors.New("unexpected content store call")
 	}
-	return s.put(ctx, source)
+	ref, err := s.put(ctx, source)
+	if err != nil {
+		return ContentRef{}, nil, err
+	}
+	release := s.release
+	if release == nil {
+		release = func() {}
+	}
+	return ref, release, nil
 }
 
 type repositoryStub struct {

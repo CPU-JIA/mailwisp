@@ -1,8 +1,11 @@
 {
-  "source": "https://raw.githubusercontent.com/MoonWeSif/DuckMail/main/public/llm-api-docs.txt",
-  "accessed_at": "2026-07-15",
+  "source": "https://raw.githubusercontent.com/MoonWeSif/DuckMail/4ae0094001b958eaf170249f1081cc60b2ca30e4/public/llm-api-docs.txt",
+  "source_commit": "4ae0094001b958eaf170249f1081cc60b2ca30e4",
+  "source_sha256": "07c133c3ea85e5be5d887ebb015125360e4b984bed9bc4c44593153a0fe6d333",
+  "verified_at": "2026-07-18",
   "upstream_base_url": "https://api.duckmail.sbs",
   "mailwisp_namespace": "/compat/duckmail",
+  "authentication": "bearer_token_or_private_domain_api_key",
   "page_size": 30,
   "error_fields": ["error", "message"],
   "endpoints": [

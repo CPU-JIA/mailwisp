@@ -22,7 +22,6 @@ type Repository interface {
 	CreateInbox(context.Context, NewInbox) (Inbox, error)
 	GetInbox(context.Context, message.InboxID) (Inbox, error)
 	DeleteInbox(context.Context, message.InboxID) ([]message.ContentRef, error)
-	PurgeInbox(context.Context, message.InboxID) error
 	ListMessages(context.Context, message.InboxID, Page) (MessagePage, error)
 	GetMessage(context.Context, message.InboxID, message.MessageID) (MessageDetail, error)
 	DeleteMessage(context.Context, message.InboxID, message.MessageID) (*message.ContentRef, error)
@@ -35,9 +34,8 @@ type CapabilityIssuer interface {
 	Issue(context.Context, message.InboxID, auth.ScopeSet, time.Time) (auth.IssuedCapability, error)
 }
 
-// ContentDeleter removes unreferenced immutable Raw MIME.
-type ContentDeleter interface {
-	Delete(message.ContentRef) error
+// ContentReader opens immutable Raw MIME owned by Inbox metadata.
+type ContentReader interface {
 	OpenRaw(context.Context, message.ContentRef) (io.ReadCloser, error)
 }
 
@@ -66,7 +64,7 @@ type CreatedInbox struct {
 type Service struct {
 	repository Repository
 	issuer     CapabilityIssuer
-	content    ContentDeleter
+	content    ContentReader
 	parser     *mail.Parser
 	domains    []string
 	allowed    map[string]struct{}
@@ -77,9 +75,9 @@ type Service struct {
 }
 
 // NewService constructs an Inbox service with explicit lifecycle limits.
-func NewService(repository Repository, issuer CapabilityIssuer, content ContentDeleter, options Options) (*Service, error) {
+func NewService(repository Repository, issuer CapabilityIssuer, content ContentReader, options Options) (*Service, error) {
 	if repository == nil || issuer == nil || content == nil {
-		return nil, errors.New("mailbox repository, capability issuer, and content deleter are required")
+		return nil, errors.New("mailbox repository, capability issuer, and content reader are required")
 	}
 	if len(options.PublicDomains) == 0 {
 		return nil, errors.New("at least one public Inbox domain is required")
@@ -133,7 +131,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (CreatedInb
 	now := s.now().UTC()
 	expiresAt := now.Add(lifetime)
 	localPart := strings.ToLower(strings.TrimSpace(request.LocalPart))
-	if localPart != "" && !validLocalPart(localPart) {
+	if localPart != "" && !message.ValidInboxLocalPart(localPart) {
 		return CreatedInbox{}, ErrInvalidLocalPart
 	}
 	var inbox Inbox
@@ -178,25 +176,10 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (CreatedInb
 	if err != nil {
 		cleanupContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		cleanupErr := s.repository.PurgeInbox(cleanupContext, inbox.ID)
+		_, cleanupErr := s.repository.DeleteInbox(cleanupContext, inbox.ID)
 		return CreatedInbox{}, errors.Join(fmt.Errorf("issue Inbox capability: %w", err), cleanupErr)
 	}
 	return CreatedInbox{Inbox: inbox, Capability: capability}, nil
-}
-
-func validLocalPart(localPart string) bool {
-	if len(localPart) < 1 || len(localPart) > 64 {
-		return false
-	}
-	for index, character := range localPart {
-		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '.' && character != '_' && character != '-' {
-			return false
-		}
-		if (index == 0 || index == len(localPart)-1) && (character == '.' || character == '_' || character == '-') {
-			return false
-		}
-	}
-	return true
 }
 
 // Get returns one active Inbox owned by the authenticated principal.
@@ -204,13 +187,10 @@ func (s *Service) Get(ctx context.Context, inboxID message.InboxID) (Inbox, erro
 	return s.repository.GetInbox(ctx, inboxID)
 }
 
-// Delete permanently removes an Inbox and any newly unreferenced Raw MIME.
+// Delete permanently removes an Inbox and durably queues newly unreferenced Raw MIME.
 func (s *Service) Delete(ctx context.Context, inboxID message.InboxID) error {
-	refs, err := s.repository.DeleteInbox(ctx, inboxID)
-	if err != nil {
-		return err
-	}
-	return s.deleteContent(refs)
+	_, err := s.repository.DeleteInbox(ctx, inboxID)
+	return err
 }
 
 // ListMessages returns one bounded newest-first canonical keyset page.
@@ -251,16 +231,10 @@ func (s *Service) GetMessage(ctx context.Context, inboxID message.InboxID, messa
 	return s.repository.GetMessage(ctx, inboxID, messageID)
 }
 
-// DeleteMessage removes one owned message and newly unreferenced Raw MIME.
+// DeleteMessage removes one owned message and durably queues newly unreferenced Raw MIME.
 func (s *Service) DeleteMessage(ctx context.Context, inboxID message.InboxID, messageID message.MessageID) error {
-	ref, err := s.repository.DeleteMessage(ctx, inboxID, messageID)
-	if err != nil {
-		return err
-	}
-	if ref == nil {
-		return nil
-	}
-	return s.content.Delete(*ref)
+	_, err := s.repository.DeleteMessage(ctx, inboxID, messageID)
+	return err
 }
 
 // MarkMessageSeen records that one owned message has been opened.
@@ -313,16 +287,6 @@ func (s *Service) OpenAttachment(ctx context.Context, inboxID message.InboxID, m
 		return AttachmentSource{}, err
 	}
 	return AttachmentSource{Reader: stream, FileName: selected.FileName, ContentType: selected.ContentType, Size: selected.SizeBytes}, nil
-}
-
-func (s *Service) deleteContent(refs []message.ContentRef) error {
-	var errs []error
-	for _, ref := range refs {
-		if err := s.content.Delete(ref); err != nil {
-			errs = append(errs, fmt.Errorf("delete Raw MIME %q: %w", ref.Key, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func generateLocalPart(random io.Reader) (string, error) {

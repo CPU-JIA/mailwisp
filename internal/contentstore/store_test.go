@@ -177,6 +177,44 @@ func TestStoreConcurrentDuplicatePut(t *testing.T) {
 	}
 }
 
+func TestStoreDeletionWaitsForDeliveryLeaseAndRechecksReference(t *testing.T) {
+	store := newTestStore(t, 1024)
+	ref, release, err := store.PutLeased(context.Background(), strings.NewReader("leased delivery"))
+	if err != nil {
+		t.Fatalf("PutLeased() error = %v", err)
+	}
+	referenceChecked := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		deleted, err := store.DeleteUnreferenced(context.Background(), ref, func(context.Context, string) (bool, error) {
+			close(referenceChecked)
+			return false, nil
+		})
+		if err == nil && !deleted {
+			err = errors.New("DeleteUnreferenced() deleted = false")
+		}
+		result <- err
+	}()
+
+	select {
+	case <-referenceChecked:
+		t.Fatal("deletion rechecked metadata before delivery released its lease")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("deletion did not continue after delivery released its lease")
+	}
+	if _, err := store.OpenContent(ref); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenContent(after deletion) error = %v, want os.ErrNotExist", err)
+	}
+}
+
 func TestStoreCancelledContextCleansStaging(t *testing.T) {
 	t.Parallel()
 

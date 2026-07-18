@@ -32,7 +32,7 @@ func TestCreateAccountMapsAddressToCanonicalInbox(t *testing.T) {
 	if _, err := service.CreateAccount(context.Background(), CreateAccountRequest{Address: "Legacy", Domain: "mailwisp.test"}); err != nil || mailboxes.created.LocalPart != "legacy" || mailboxes.created.Domain != "mailwisp.test" {
 		t.Fatalf("legacy prefix request = %+v, error = %v", mailboxes.created, err)
 	}
-	for _, address := range []string{"@mailwisp.test", "demo@", "demo@mailwisp.test@invalid"} {
+	for _, address := range []string{"@mailwisp.test", "demo@", "demo@mailwisp.test@invalid", "a..b@mailwisp.test"} {
 		if _, err := service.CreateAccount(context.Background(), CreateAccountRequest{Address: address}); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("invalid address %q error = %v", address, err)
 		}

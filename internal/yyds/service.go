@@ -89,6 +89,9 @@ func (s *Service) CreateAccount(ctx context.Context, request CreateAccountReques
 			domain = addressDomain
 		}
 	}
+	if localPart != "" && !message.ValidInboxLocalPart(localPart) {
+		return mailbox.CreatedInbox{}, ErrInvalidRequest
+	}
 	created, err := s.mailboxes.Create(ctx, mailbox.CreateRequest{Domain: domain, LocalPart: localPart})
 	if err != nil {
 		return mailbox.CreatedInbox{}, err

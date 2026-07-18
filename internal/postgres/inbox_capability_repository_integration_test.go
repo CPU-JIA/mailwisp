@@ -160,7 +160,7 @@ func TestInboxCapabilityRotationIsAtomicAndFenced(t *testing.T) {
 	}
 	inboxID := createInbox(t, pool, "rotate-capability@example.com")
 	scopes, _ := auth.NewScopeSet(auth.ScopeInboxRead, auth.ScopeMessageRead)
-	issued, err := service.Issue(context.Background(), inboxID, scopes, time.Now().UTC().Add(time.Hour))
+	issued, err := service.Issue(context.Background(), inboxID, scopes, time.Now().UTC().Add(30*time.Minute))
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
 	}
@@ -241,11 +241,11 @@ func TestInboxCapabilityKIDAndScopeConstraints(t *testing.T) {
 		t.Fatalf("NewInboxCapabilityRepository() error = %v", err)
 	}
 	inboxID := createInbox(t, pool, "constraint-capability@example.com")
-	capability := newIntegrationCapability(t, inboxID, time.Now().UTC().Add(time.Hour))
+	capability := newIntegrationCapability(t, inboxID, time.Now().UTC().Add(30*time.Minute))
 	if _, err := repository.CreateCapability(context.Background(), capability); err != nil {
 		t.Fatalf("CreateCapability() error = %v", err)
 	}
-	duplicate := newIntegrationCapability(t, inboxID, time.Now().UTC().Add(time.Hour))
+	duplicate := newIntegrationCapability(t, inboxID, time.Now().UTC().Add(30*time.Minute))
 	duplicate.KID = capability.KID
 	if _, err := repository.CreateCapability(context.Background(), duplicate); !errors.Is(err, auth.ErrCapabilityKIDConflict) {
 		t.Fatalf("CreateCapability(duplicate KID) error = %v", err)

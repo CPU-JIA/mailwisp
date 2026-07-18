@@ -45,8 +45,8 @@ func (r *InboxCapabilityRepository) CreateCapability(ctx context.Context, capabi
 		FROM inboxes
 		WHERE id = $1::uuid
 		  AND status = 'active'
-		  AND (expires_at IS NULL OR expires_at > $5)
-		  AND (expires_at IS NULL OR $6 <= expires_at)
+		  AND expires_at > $5
+		  AND $6 <= expires_at
 		RETURNING id::text, inbox_id::text, kid, secret_digest, scope_mask,
 		          created_at, expires_at, last_used_at, revoked_at
 	`,

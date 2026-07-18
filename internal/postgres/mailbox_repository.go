@@ -20,7 +20,8 @@ const cleanupAdvisoryLockID int64 = 0x4d575350434c4e50
 
 // MailboxRepository persists Inbox lifecycle and ownership-scoped message access.
 type MailboxRepository struct {
-	pool *pgxpool.Pool
+	pool         *pgxpool.Pool
+	lockObserver func(message.InboxID)
 }
 
 // NewMailboxRepository constructs a PostgreSQL mailbox repository.
@@ -77,6 +78,24 @@ func (r *MailboxRepository) DeleteInbox(ctx context.Context, inboxID message.Inb
 		return nil, fmt.Errorf("begin Inbox deletion: %w", err)
 	}
 	defer rollbackTransaction(transaction)
+	var lockedID string
+	err = transaction.QueryRow(ctx, `
+		SELECT id::text
+		FROM inboxes
+		WHERE id = $1::uuid
+		  AND status = 'active'
+		  AND expires_at > now()
+		FOR UPDATE
+	`, string(inboxID)).Scan(&lockedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, mailbox.ErrInboxNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock Inbox for deletion: %w", err)
+	}
+	if r.lockObserver != nil {
+		r.lockObserver(inboxID)
+	}
 
 	rows, err := transaction.Query(ctx, `
 		SELECT content.content_key, content.size_bytes
@@ -94,12 +113,7 @@ func (r *MailboxRepository) DeleteInbox(ctx context.Context, inboxID message.Inb
 		return nil, fmt.Errorf("collect Inbox content: %w", err)
 	}
 
-	tag, err := transaction.Exec(ctx, `
-		DELETE FROM inboxes
-		WHERE id = $1::uuid
-		  AND status = 'active'
-		  AND expires_at > now()
-	`, string(inboxID))
+	tag, err := transaction.Exec(ctx, "DELETE FROM inboxes WHERE id = $1::uuid", lockedID)
 	if err != nil {
 		return nil, fmt.Errorf("delete Inbox: %w", err)
 	}
@@ -120,6 +134,9 @@ func (r *MailboxRepository) DeleteInbox(ctx context.Context, inboxID message.Inb
 			return nil, fmt.Errorf("delete unreferenced Inbox content: %w", err)
 		}
 		if tag.RowsAffected() == 1 {
+			if err := enqueueContentDeletion(ctx, transaction, ref); err != nil {
+				return nil, fmt.Errorf("enqueue unreferenced Inbox content: %w", err)
+			}
 			orphans = append(orphans, ref)
 		}
 	}
@@ -127,14 +144,6 @@ func (r *MailboxRepository) DeleteInbox(ctx context.Context, inboxID message.Inb
 		return nil, fmt.Errorf("commit Inbox deletion: %w", err)
 	}
 	return orphans, nil
-}
-
-// PurgeInbox compensates a failed capability issuance.
-func (r *MailboxRepository) PurgeInbox(ctx context.Context, inboxID message.InboxID) error {
-	if _, err := r.pool.Exec(ctx, "DELETE FROM inboxes WHERE id = $1::uuid", string(inboxID)); err != nil {
-		return fmt.Errorf("purge Inbox: %w", err)
-	}
-	return nil
 }
 
 // ListMessages returns a bounded newest-first page for one active Inbox.
@@ -342,8 +351,7 @@ func (r *MailboxRepository) CleanupExpiredInboxes(ctx context.Context, batchSize
 	rows, err := transaction.Query(ctx, `
 		SELECT id
 		FROM inboxes
-		WHERE expires_at IS NOT NULL
-		  AND expires_at <= now()
+		WHERE expires_at <= now()
 		ORDER BY expires_at, id
 		FOR UPDATE SKIP LOCKED
 		LIMIT $1
@@ -391,6 +399,9 @@ func (r *MailboxRepository) CleanupExpiredInboxes(ctx context.Context, batchSize
 			return 0, nil, fmt.Errorf("delete expired unreferenced content: %w", err)
 		}
 		if contentTag.RowsAffected() == 1 {
+			if err := enqueueContentDeletion(ctx, transaction, ref); err != nil {
+				return 0, nil, fmt.Errorf("enqueue expired unreferenced content: %w", err)
+			}
 			orphans = append(orphans, ref)
 		}
 	}
@@ -437,6 +448,11 @@ func (r *MailboxRepository) DeleteMessage(ctx context.Context, inboxID message.I
 	if err != nil {
 		return nil, fmt.Errorf("delete unreferenced message content: %w", err)
 	}
+	if tag.RowsAffected() == 1 {
+		if err := enqueueContentDeletion(ctx, transaction, ref); err != nil {
+			return nil, fmt.Errorf("enqueue unreferenced message content: %w", err)
+		}
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit message deletion: %w", err)
 	}
@@ -444,6 +460,83 @@ func (r *MailboxRepository) DeleteMessage(ctx context.Context, inboxID message.I
 		return nil, nil
 	}
 	return &ref, nil
+}
+
+// ListContentDeletions returns one stable, bounded page of durable physical-deletion work.
+func (r *MailboxRepository) ListContentDeletions(ctx context.Context, limit int) ([]message.ContentDeletion, error) {
+	if limit <= 0 || limit > 1000 {
+		return nil, errors.New("content deletion limit must be between 1 and 1000")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT content_key, size_bytes, generation
+		FROM content_deletion_queue
+		ORDER BY enqueued_at, content_key
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list content deletions: %w", err)
+	}
+	deletions := make([]message.ContentDeletion, 0, limit)
+	for rows.Next() {
+		var deletion message.ContentDeletion
+		if err := rows.Scan(&deletion.Content.Key, &deletion.Content.SizeBytes, &deletion.Generation); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan content deletion: %w", err)
+		}
+		deletions = append(deletions, deletion)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate content deletions: %w", err)
+	}
+	return deletions, nil
+}
+
+// ContentReferenced reports whether committed metadata currently owns a content object.
+func (r *MailboxRepository) ContentReferenced(ctx context.Context, key string) (bool, error) {
+	var referenced bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM mail_contents WHERE content_key = $1)
+	`, key).Scan(&referenced); err != nil {
+		return false, fmt.Errorf("check content reference: %w", err)
+	}
+	return referenced, nil
+}
+
+// AcknowledgeContentDeletion removes only the exact generation that was processed.
+// A newer orphaning event therefore cannot be lost to a stale worker acknowledgement.
+func (r *MailboxRepository) AcknowledgeContentDeletion(ctx context.Context, key string, generation int64) (bool, error) {
+	if generation <= 0 {
+		return false, errors.New("content deletion generation must be positive")
+	}
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM content_deletion_queue
+		WHERE content_key = $1 AND generation = $2
+	`, key, generation)
+	if err != nil {
+		return false, fmt.Errorf("acknowledge content deletion: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// CountContentDeletions returns the current durable physical-deletion backlog.
+func (r *MailboxRepository) CountContentDeletions(ctx context.Context) (int, error) {
+	var count int
+	if err := r.pool.QueryRow(ctx, "SELECT count(*) FROM content_deletion_queue").Scan(&count); err != nil {
+		return 0, fmt.Errorf("count content deletions: %w", err)
+	}
+	return count, nil
+}
+
+func enqueueContentDeletion(ctx context.Context, transaction pgx.Tx, ref message.ContentRef) error {
+	_, err := transaction.Exec(ctx, `
+		INSERT INTO content_deletion_queue (content_key, size_bytes)
+		VALUES ($1, $2)
+		ON CONFLICT (content_key) DO UPDATE
+		SET size_bytes = EXCLUDED.size_bytes,
+		    generation = content_deletion_queue.generation + 1,
+		    enqueued_at = clock_timestamp()
+	`, ref.Key, ref.SizeBytes)
+	return err
 }
 
 func rollbackTransaction(transaction pgx.Tx) {

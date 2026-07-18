@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -226,6 +227,79 @@ func TestAttachmentDownloadStreamsOwnedContent(t *testing.T) {
 	}
 }
 
+func TestRawSourceDownloadStreamsOwnedRFC822(t *testing.T) {
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetMailboxService(&mailboxAPIStub{}, &authStub{})
+	messageID := "018f26e5-8f04-7b44-8ba2-4a8f434dcb13"
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/inboxes/me/messages/"+messageID+"/source", nil)
+	request.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "Subject: failed\r\n\r\nraw bytes" {
+		t.Fatalf("Raw Source response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("Content-Type") != "message/rfc822" || recorder.Header().Get("Cache-Control") != "no-store" || recorder.Header().Get("Content-Length") != "28" {
+		t.Fatalf("Raw Source headers = %v", recorder.Header())
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Disposition"), messageID+".eml") || recorder.Header().Get("ETag") != "" {
+		t.Fatalf("Raw Source disposition/correlation headers = %v", recorder.Header())
+	}
+}
+
+func TestCanonicalMessageSeenMutationUsesUpdateScope(t *testing.T) {
+	service := &mailboxAPIStub{}
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetMailboxService(service, &authStub{})
+	messageID := "018f26e5-8f04-7b44-8ba2-4a8f434dcb13"
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/inboxes/me/messages/"+messageID, strings.NewReader(`{"seen":true}`))
+	request.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent || service.seenMessage != message.MessageID(messageID) {
+		t.Fatalf("message seen response = %d %s, message = %q", recorder.Code, recorder.Body.String(), service.seenMessage)
+	}
+
+	invalid := httptest.NewRequest(http.MethodPatch, "/api/v1/inboxes/me/messages/"+messageID, strings.NewReader(`{"seen":false}`))
+	invalid.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder = httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, invalid)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `"code":"invalid_request"`) {
+		t.Fatalf("invalid seen response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCanonicalHeavyReadReturnsExplicitBackpressure(t *testing.T) {
+	service := &mailboxAPIStub{}
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second, HeavyReadConcurrency: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetMailboxService(service, &authStub{})
+	server.heavyReads <- struct{}{}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/inboxes/me/messages/018f26e5-8f04-7b44-8ba2-4a8f434dcb13/source", nil)
+	request.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	<-server.heavyReads
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Retry-After") != "1" || !strings.Contains(recorder.Body.String(), `"code":"service_busy"`) || service.sourceOpens != 0 {
+		t.Fatalf("heavy read response = %d %s headers=%v opens=%d", recorder.Code, recorder.Body.String(), recorder.Header(), service.sourceOpens)
+	}
+}
+
+func TestUnmappedHTTPErrorLogsRootCauseWithoutLeakingIt(t *testing.T) {
+	var logs bytes.Buffer
+	service := &mailboxAPIStub{getError: errors.New("database connection detail")}
+	server := NewServer(config.HTTP{ReadinessTimeout: time.Second}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	server.SetMailboxService(service, &authStub{})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/inboxes/me", nil)
+	request.Header.Set("Authorization", "Bearer wisp_cap_v1_test")
+	recorder := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError || strings.Contains(recorder.Body.String(), "database connection detail") {
+		t.Fatalf("internal error response = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(logs.String(), "database connection detail") || !strings.Contains(logs.String(), "request_id") {
+		t.Fatalf("internal error log = %s", logs.String())
+	}
+}
+
 func TestMessageListPreservesDataArrayAndReturnsNextCursor(t *testing.T) {
 	before := mailbox.MessageCursor{ReceivedAt: time.Date(2026, 7, 16, 2, 0, 0, 123456000, time.UTC), ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb12"}
 	next := mailbox.MessageCursor{ReceivedAt: time.Date(2026, 7, 16, 1, 0, 0, 654321000, time.UTC), ID: "018f26e5-8f04-7b44-8ba2-4a8f434dcb13"}
@@ -285,7 +359,7 @@ func (s *httpMetricsStub) ObserveHTTPRequest(_, route string, _ int, _ time.Dura
 type authStub struct{}
 
 func (*authStub) Authenticate(context.Context, string, ...auth.Scope) (auth.Principal, error) {
-	scopes, _ := auth.NewScopeSet(auth.ScopeInboxRead, auth.ScopeInboxDelete, auth.ScopeMessageRead, auth.ScopeMessageDelete)
+	scopes, _ := auth.NewScopeSet(auth.ScopeInboxRead, auth.ScopeInboxDelete, auth.ScopeMessageRead, auth.ScopeMessageUpdate, auth.ScopeMessageDelete)
 	return auth.Principal{InboxID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Scopes: scopes, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
@@ -293,13 +367,20 @@ type mailboxAPIStub struct {
 	creates     int
 	listRequest mailbox.CursorPage
 	listResult  mailbox.CursorMessagePage
+	getError    error
+	seenMessage message.MessageID
+	sourceOpens int
 }
 
 func (s *mailboxAPIStub) Create(context.Context, mailbox.CreateRequest) (mailbox.CreatedInbox, error) {
 	s.creates++
 	return mailbox.CreatedInbox{Inbox: mailbox.Inbox{Address: "demo@mailwisp.test"}, Capability: auth.IssuedCapability{Plaintext: "created-token"}}, nil
 }
-func (*mailboxAPIStub) Get(context.Context, message.InboxID) (mailbox.Inbox, error) {
+
+func (s *mailboxAPIStub) Get(context.Context, message.InboxID) (mailbox.Inbox, error) {
+	if s.getError != nil {
+		return mailbox.Inbox{}, s.getError
+	}
 	return mailbox.Inbox{ID: message.InboxID("018f26e5-8f04-7b44-8ba2-4a8f434dcb12"), Address: "demo@mailwisp.test", Status: "active"}, nil
 }
 func (*mailboxAPIStub) Delete(context.Context, message.InboxID) error { return nil }
@@ -313,8 +394,17 @@ func (s *mailboxAPIStub) ListMessages(_ context.Context, _ message.InboxID, requ
 func (*mailboxAPIStub) GetMessage(context.Context, message.InboxID, message.MessageID) (mailbox.MessageDetail, error) {
 	return mailbox.MessageDetail{}, nil
 }
+
+func (s *mailboxAPIStub) OpenSource(context.Context, message.InboxID, message.MessageID) (mailbox.RawSource, error) {
+	s.sourceOpens++
+	return mailbox.RawSource{Reader: io.NopCloser(strings.NewReader("Subject: failed\r\n\r\nraw bytes")), Size: 28}, nil
+}
 func (*mailboxAPIStub) OpenAttachment(context.Context, message.InboxID, message.MessageID, string) (mailbox.AttachmentSource, error) {
 	return mailbox.AttachmentSource{Reader: io.NopCloser(strings.NewReader("attachment bytes")), FileName: "report.txt", ContentType: "text/plain", Size: 16}, nil
+}
+func (s *mailboxAPIStub) MarkMessageSeen(_ context.Context, _ message.InboxID, messageID message.MessageID) error {
+	s.seenMessage = messageID
+	return nil
 }
 func (*mailboxAPIStub) DeleteMessage(context.Context, message.InboxID, message.MessageID) error {
 	return nil

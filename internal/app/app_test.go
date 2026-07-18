@@ -176,12 +176,12 @@ type appContentStoreStub struct{}
 
 func (s *appContentStoreStub) CheckCapacity(context.Context) error { return nil }
 
-func (s *appContentStoreStub) Put(_ context.Context, source io.Reader) (message.ContentRef, error) {
+func (s *appContentStoreStub) PutLeased(_ context.Context, source io.Reader) (message.ContentRef, func(), error) {
 	content, err := io.ReadAll(source)
 	if err != nil {
-		return message.ContentRef{}, err
+		return message.ContentRef{}, nil, err
 	}
-	return message.ContentRef{Key: "sha256/" + string(bytes.Repeat([]byte{'a'}, 64)), SizeBytes: int64(len(content))}, nil
+	return message.ContentRef{Key: "sha256/" + string(bytes.Repeat([]byte{'a'}, 64)), SizeBytes: int64(len(content))}, func() {}, nil
 }
 
 type appDeliveryRepositoryStub struct {

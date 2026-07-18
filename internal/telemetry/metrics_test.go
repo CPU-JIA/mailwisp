@@ -23,7 +23,7 @@ func TestMetricsExposeBoundedApplicationSignals(t *testing.T) {
 	metrics.ObserveLMTPStorageRejected("capacity")
 	metrics.ObserveLMTPStorageRejected("unbounded")
 	metrics.ObserveParser("success", 10*time.Millisecond)
-	metrics.ObserveRetention("success", 2, 1)
+	metrics.ObserveRetention("success", 2, 1, 3)
 	recorder := httptest.NewRecorder()
 	metrics.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if recorder.Code != http.StatusOK {
@@ -38,6 +38,7 @@ func TestMetricsExposeBoundedApplicationSignals(t *testing.T) {
 		`mailwisp_lmtp_storage_rejections_total{reason="capacity"} 1`,
 		`mailwisp_parser_runs_total{result="success"} 1`,
 		`mailwisp_retention_deleted_total{kind="inbox"} 2`,
+		`mailwisp_content_deletion_pending 3`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("metrics output missing %q", expected)

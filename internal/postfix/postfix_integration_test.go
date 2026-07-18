@@ -47,6 +47,16 @@ func TestPostfixLMTPRetrySemantics(t *testing.T) {
 	postfix := startPostfix(t, lmtpPort)
 
 	assertPostfixVersion(t, postfix.container)
+	if !t.Run("收件人验证不可用时RCPT临时失败", func(t *testing.T) {
+		testRecipientVerificationTemporaryFailure(t, postfix)
+	}) {
+		return
+	}
+	if !t.Run("收件人验证缓存跟随邮箱生命周期", func(t *testing.T) {
+		testRecipientVerificationTracksInboxLifecycle(t, postfix, lmtpPort)
+	}) {
+		return
+	}
 	if !t.Run("队列跨Postfix重启后重投", func(t *testing.T) {
 		testQueueSurvivesRestart(t, postfix, lmtpPort)
 	}) {
@@ -73,6 +83,7 @@ func TestPostfixLMTPRetrySemantics(t *testing.T) {
 }
 
 func testQueueSurvivesRestart(t *testing.T, postfix *postfixFixture, lmtpPort int) {
+	primeRecipientVerification(t, postfix, lmtpPort)
 	raw := rawMessage("queue-restart", "Queue restart", "durable queue survives restart")
 	queueID := submitSMTP(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, raw)
 	waitForQueueID(t, postfix.container, queueID, true)
@@ -199,17 +210,54 @@ func testUnknownRecipientIsPermanent(t *testing.T, postfix *postfixFixture, lmtp
 	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
 
 	const unknownRecipient = "missing@example.test"
-	raw := rawMessage("unknown-recipient", "Unknown recipient", "this delivery must not be retried")
-	queueID := submitSMTP(t, postfix.smtpAddress(t), "", unknownRecipient, raw)
+	probeSMTPRecipient(t, postfix.smtpAddress(t), testEnvelopeSender, unknownRecipient, 550)
 	waitForUnknownLookup(t, resolver)
-	waitForQueueID(t, postfix.container, queueID, false)
-	waitForContainerLog(t, postfix.container, queueID, "550 5.1.1", "status=bounced")
+	queue := postqueueOutput(t, postfix.container)
+	if !strings.Contains(queue, "Mail queue is empty") {
+		t.Fatalf("unknown recipient created Queue state: %s", queue)
+	}
 
 	select {
 	case attempt := <-receiver.attempts:
 		t.Fatalf("message receiver was called for permanently rejected recipient: %+v", attempt)
 	default:
 	}
+}
+
+func testRecipientVerificationTemporaryFailure(t *testing.T, postfix *postfixFixture) {
+	probeSMTPRecipient(t, postfix.smtpAddress(t), testEnvelopeSender, "temporary@example.test", 450)
+	queue := postqueueOutput(t, postfix.container)
+	if !strings.Contains(queue, "Mail queue is empty") {
+		t.Fatalf("temporary recipient verification failure created Queue state: %s", queue)
+	}
+}
+
+func testRecipientVerificationTracksInboxLifecycle(t *testing.T, postfix *postfixFixture, lmtpPort int) {
+	const dynamicRecipient = "lifecycle@example.test"
+	resolver := newStaticResolver("")
+	receiver := newRecordingReceiver(0)
+	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
+	defer service.stop(t)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
+
+	probeSMTPRecipient(t, postfix.smtpAddress(t), testEnvelopeSender, dynamicRecipient, 550)
+	resolver.setAcceptedAddress(dynamicRecipient)
+	time.Sleep(2200 * time.Millisecond)
+	probeSMTPRecipient(t, postfix.smtpAddress(t), testEnvelopeSender, dynamicRecipient, 250)
+
+	resolver.setAcceptedAddress("")
+	time.Sleep(2200 * time.Millisecond)
+	probeSMTPRecipient(t, postfix.smtpAddress(t), testEnvelopeSender, dynamicRecipient, 550)
+}
+
+func primeRecipientVerification(t *testing.T, postfix *postfixFixture, lmtpPort int) {
+	t.Helper()
+	resolver := newStaticResolver(testRecipient)
+	receiver := newRecordingReceiver(0)
+	service := startLMTP(t, lmtpPort, resolver, receiver, nil)
+	waitForLMTPReachableFromPostfix(t, postfix.container, lmtpPort)
+	probeSMTPRecipient(t, postfix.smtpAddress(t), testEnvelopeSender, testRecipient, 250)
+	service.stop(t)
 }
 
 type postfixFixture struct {
@@ -342,6 +390,13 @@ func waitForQueueID(t *testing.T, container testcontainers.Container, queueID st
 	}
 }
 
+func postqueueOutput(t *testing.T, container testcontainers.Container) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return string(execOutput(t, ctx, container, "postqueue", "-p"))
+}
+
 func execOutput(t *testing.T, ctx context.Context, container testcontainers.Container, command ...string) []byte {
 	t.Helper()
 	exitCode, reader, err := container.Exec(ctx, command, tcexec.Multiplexed())
@@ -420,6 +475,26 @@ func submitSMTP(t *testing.T, address, sender, recipient string, raw []byte) str
 	}
 	smtpCommand(t, reader, writer, 221, "QUIT")
 	return match[1]
+}
+
+func probeSMTPRecipient(t *testing.T, address, sender, recipient string, wantCode int) {
+	t.Helper()
+	connection, err := net.DialTimeout("tcp", address, 5*time.Second)
+	if err != nil {
+		t.Fatalf("connect to Postfix SMTP: %v", err)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		t.Fatalf("set SMTP deadline: %v", err)
+	}
+	reader := bufio.NewReader(connection)
+	writer := bufio.NewWriter(connection)
+	expectSMTP(t, reader, 220)
+	smtpCommand(t, reader, writer, 250, "EHLO test.integration")
+	smtpCommand(t, reader, writer, 250, "MAIL FROM:<%s>", sender)
+	smtpCommand(t, reader, writer, wantCode, "RCPT TO:<%s>", recipient)
+	smtpCommand(t, reader, writer, 250, "RSET")
+	smtpCommand(t, reader, writer, 221, "QUIT")
 }
 
 func smtpCommand(t *testing.T, reader *bufio.Reader, writer *bufio.Writer, wantCode int, format string, arguments ...any) string {
@@ -512,13 +587,19 @@ func newStaticResolver(address string) *staticResolver {
 }
 
 func (r *staticResolver) ResolveInboxForDelivery(_ context.Context, address string, _ int64) (message.InboxID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if strings.ToLower(address) == r.acceptedAddress {
 		return r.inboxID, nil
 	}
-	r.mu.Lock()
 	r.unknownLookups++
-	r.mu.Unlock()
 	return "", message.ErrInboxNotFound
+}
+
+func (r *staticResolver) setAcceptedAddress(address string) {
+	r.mu.Lock()
+	r.acceptedAddress = strings.ToLower(address)
+	r.mu.Unlock()
 }
 
 func waitForUnknownLookup(t *testing.T, resolver *staticResolver) {

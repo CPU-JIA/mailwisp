@@ -23,6 +23,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTP.Addr != ":8080" {
 		t.Fatalf("HTTP.Addr = %q, want %q", cfg.HTTP.Addr, ":8080")
 	}
+	if cfg.HTTP.HeavyReadConcurrency != 4 {
+		t.Fatalf("HTTP.HeavyReadConcurrency = %d, want 4", cfg.HTTP.HeavyReadConcurrency)
+	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Fatalf("LogLevel = %v, want %v", cfg.LogLevel, slog.LevelInfo)
 	}
@@ -282,6 +285,7 @@ func clearConfigurationEnvironment(t *testing.T) {
 		"IDLE_TIMEOUT",
 		"MAX_HEADER_BYTES",
 		"READINESS_TIMEOUT",
+		"HEAVY_READ_CONCURRENCY",
 		"CREATE_RATE_PER_MINUTE",
 		"CREATE_RATE_BURST",
 		"CREATE_DAILY_LIMIT",

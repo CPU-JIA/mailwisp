@@ -154,7 +154,7 @@ func TestMaintenanceLeaseExcludesReconciliationDuringServe(t *testing.T) {
 		t.Fatalf("OpenPool(max one) error = %v", err)
 	}
 	t.Cleanup(pool.Close)
-	shared, err := AcquireServiceLease(context.Background(), integrationDataSourceName)
+	serviceLease, err := AcquireServiceLease(context.Background(), integrationDataSourceName)
 	if err != nil {
 		t.Fatalf("AcquireServiceLease() error = %v", err)
 	}
@@ -165,14 +165,17 @@ func TestMaintenanceLeaseExcludesReconciliationDuringServe(t *testing.T) {
 		t.Fatalf("Ready() with one pooled connection and shared lease error = %v", err)
 	}
 	readyCancel()
+	if duplicate, err := AcquireServiceLease(context.Background(), integrationDataSourceName); !errors.Is(err, ErrServiceActive) || duplicate != nil {
+		t.Fatalf("second AcquireServiceLease() = lease %v, error %v, want ErrServiceActive", duplicate, err)
+	}
 	exclusive, err := TryAcquireMaintenanceLease(context.Background(), integrationDataSourceName)
 	if !errors.Is(err, ErrServiceActive) || exclusive != nil {
 		t.Fatalf("TryAcquireMaintenanceLease() = lease %v, error %v, want ErrServiceActive", exclusive, err)
 	}
 	releaseContext, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := shared.Release(releaseContext); err != nil {
+	if err := serviceLease.Release(releaseContext); err != nil {
 		releaseCancel()
-		t.Fatalf("release shared lease: %v", err)
+		t.Fatalf("release service lease: %v", err)
 	}
 	releaseCancel()
 
@@ -180,10 +183,8 @@ func TestMaintenanceLeaseExcludesReconciliationDuringServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TryAcquireMaintenanceLease(after release) error = %v", err)
 	}
-	blockedContext, blockedCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer blockedCancel()
-	if _, err := AcquireServiceLease(blockedContext, integrationDataSourceName); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("AcquireServiceLease(while exclusive) error = %v, want deadline", err)
+	if _, err := AcquireServiceLease(context.Background(), integrationDataSourceName); !errors.Is(err, ErrServiceActive) {
+		t.Fatalf("AcquireServiceLease(while exclusive) error = %v, want ErrServiceActive", err)
 	}
 	if err := exclusive.Release(context.Background()); err != nil {
 		t.Fatalf("release exclusive lease: %v", err)
@@ -640,7 +641,7 @@ func newIntegrationRepository(t *testing.T, pool *pgxpool.Pool) *DeliveryReposit
 
 func resetIntegrationDatabase(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), "TRUNCATE inbox_create_quotas, messages, mail_contents, inboxes CASCADE"); err != nil {
+	if _, err := pool.Exec(context.Background(), "TRUNCATE inbox_create_quotas, content_deletion_queue, messages, mail_contents, inboxes CASCADE"); err != nil {
 		t.Fatalf("truncate integration database: %v", err)
 	}
 }
@@ -652,6 +653,10 @@ func createInbox(t *testing.T, pool *pgxpool.Pool, address string) message.Inbox
 
 func createInboxWithState(t *testing.T, pool *pgxpool.Pool, address, status string, expiresAt *time.Time) message.InboxID {
 	t.Helper()
+	if expiresAt == nil {
+		defaultExpiry := time.Now().UTC().Add(time.Hour)
+		expiresAt = &defaultExpiry
+	}
 	var inboxID string
 	if err := pool.QueryRow(context.Background(), `
 		INSERT INTO inboxes (address, status, expires_at)

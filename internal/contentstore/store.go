@@ -52,6 +52,7 @@ type Store struct {
 	stagingRoot    string
 	maxBytes       int64
 	minFreeBytes   int64
+	lifecycleMu    sync.RWMutex
 	capacityMu     sync.Mutex
 	reservedBytes  int64
 	availableBytes func(string) (uint64, error)
@@ -108,12 +109,36 @@ func Open(root string, options Options) (*Store, error) {
 	return store, nil
 }
 
-// Put streams content into durable immutable storage.
+// Put streams content into durable immutable storage and releases its lifecycle
+// lease before returning. Delivery paths must use PutLeased instead.
+func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, error) {
+	ref, release, err := s.PutLeased(ctx, source)
+	if release != nil {
+		release()
+	}
+	return ref, err
+}
+
+// PutLeased stores content and keeps deletion fenced until release is called.
+// The receiver holds this lease through the metadata commit.
+func (s *Store) PutLeased(ctx context.Context, source io.Reader) (message.ContentRef, func(), error) {
+	s.lifecycleMu.RLock()
+	ref, err := s.put(ctx, source)
+	if err != nil {
+		s.lifecycleMu.RUnlock()
+		return message.ContentRef{}, nil, err
+	}
+	var once sync.Once
+	return ref, func() { once.Do(s.lifecycleMu.RUnlock) }, nil
+}
+
+// put streams content into durable immutable storage while its caller holds a
+// lifecycle read lease.
 //
 // A successful return means the final object file has been synced and linked
 // into its content-addressed path. Callers must still commit their database
 // reference before acknowledging an external delivery.
-func (s *Store) Put(ctx context.Context, source io.Reader) (message.ContentRef, error) {
+func (s *Store) put(ctx context.Context, source io.Reader) (message.ContentRef, error) {
 	if source == nil {
 		return message.ContentRef{}, errors.New("content source is required")
 	}
@@ -342,6 +367,33 @@ func (s *Store) Verify(ctx context.Context, ref message.ContentRef) error {
 
 // Delete removes a content object. Deleting a missing object is idempotent.
 func (s *Store) Delete(ref message.ContentRef) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.deleteLocked(ref)
+}
+
+// DeleteUnreferenced removes a content object only after a fenced database
+// recheck confirms that no delivery committed a new reference.
+func (s *Store) DeleteUnreferenced(ctx context.Context, ref message.ContentRef, referenced func(context.Context, string) (bool, error)) (bool, error) {
+	if referenced == nil {
+		return false, errors.New("content reference check is required")
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	retained, err := referenced(ctx, ref.Key)
+	if err != nil {
+		return false, err
+	}
+	if retained {
+		return false, nil
+	}
+	if err := s.deleteLocked(ref); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) deleteLocked(ref message.ContentRef) error {
 	path, err := s.pathForKey(ref.Key)
 	if err != nil {
 		return err
