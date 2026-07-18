@@ -146,7 +146,7 @@ function Save-BenchmarkDiagnostics {
         [System.IO.File]::WriteAllText((Join-Path $diagnosticsRoot 'compose-ps-error.txt'), $_.Exception.Message, [System.Text.UTF8Encoding]::new($false))
     }
     try {
-        $composeLogs = & docker compose @composeArguments logs --no-color postgres migrate app 2>&1 | Out-String
+        $composeLogs = & docker compose @composeArguments logs --no-color postgres db-provision migrate app 2>&1 | Out-String
         [System.IO.File]::WriteAllText((Join-Path $diagnosticsRoot 'compose.log'), $composeLogs, [System.Text.UTF8Encoding]::new($false))
     } catch {
         [System.IO.File]::WriteAllText((Join-Path $diagnosticsRoot 'compose-logs-error.txt'), $_.Exception.Message, [System.Text.UTF8Encoding]::new($false))
@@ -165,7 +165,8 @@ function Save-BenchmarkDiagnostics {
 Push-Location -LiteralPath $repositoryRoot
 try {
     $mailwispEnvironment = Join-Path $fixtureRoot 'mailwisp.env'
-    $postgresPassword = Join-Path $fixtureRoot 'postgres_password.txt'
+    $postgresOwnerPassword = Join-Path $fixtureRoot 'postgres_owner_password.txt'
+    $postgresAppPassword = Join-Path $fixtureRoot 'postgres_app_password.txt'
     $browserSessionKey = Join-Path $fixtureRoot 'browser_session_key.txt'
     $createQuotaKey = Join-Path $fixtureRoot 'create_quota_hmac_key.txt'
     [System.IO.File]::WriteAllText($mailwispEnvironment, @"
@@ -178,17 +179,21 @@ MAILWISP_POSTGRES_MIN_CONNECTIONS=1
 MAILWISP_POSTGRES_MAX_CONNECTIONS=10
 MAILWISP_CONTENT_MIN_FREE_BYTES=1073741824
 "@)
-    [System.IO.File]::WriteAllText($postgresPassword, "benchmark-postgres-password`n")
+    [System.IO.File]::WriteAllText($postgresOwnerPassword, "benchmark-owner-password`n")
+    [System.IO.File]::WriteAllText($postgresAppPassword, "benchmark-app-password`n")
     [System.IO.File]::WriteAllText($browserSessionKey, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=`n")
     [System.IO.File]::WriteAllText($createQuotaKey, "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=`n")
 
     $env:MAILWISP_ENV_FILE = $mailwispEnvironment
-    $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $postgresPassword
+    if (-not $IsWindows) { Invoke-Native -Name 'chmod 0444 Benchmark secrets' -Command { chmod 0444 $postgresOwnerPassword $postgresAppPassword $browserSessionKey $createQuotaKey } }
+    $env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE = $postgresOwnerPassword
+    $env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE = $postgresAppPassword
     $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $browserSessionKey
     $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $createQuotaKey
     $env:MAILWISP_WEB_DOMAIN = 'mail.example.com'
     $env:MAILWISP_SMTP_HOST = 'mx.example.com'
-    $env:MAILWISP_MAIL_DOMAIN = 'example.com'
+    $env:MAILWISP_PUBLIC_DOMAINS = 'example.com'
+    $env:MAILWISP_LMTP_MAX_MESSAGE_BYTES = '26214400'
     $env:MAILWISP_CERT_NAME = 'mail.example.com'
     $env:MAILWISP_BENCH_HTTP_PORT = [string]$HTTPPort
     $env:MAILWISP_BENCH_LMTP_PORT = [string]$LMTPPort
@@ -374,7 +379,7 @@ FROM mail_contents;
     $parserDrainStarted = [DateTimeOffset]::UtcNow
     $parserState = $null
     while (([DateTimeOffset]::UtcNow - $parserDrainStarted).TotalSeconds -lt $ParserDrainTimeoutSeconds) {
-        $parserStateRaw = & docker compose -p $projectName -f $baseCompose -f $benchmarkCompose exec -T postgres psql -X -q -U mailwisp -d mailwisp -Atc $parserQuery | Out-String
+        $parserStateRaw = & docker compose -p $projectName -f $baseCompose -f $benchmarkCompose exec -T postgres psql -X -q -U mailwisp_owner -d mailwisp -Atc $parserQuery | Out-String
         if ($LASTEXITCODE -ne 0) {
             throw 'Parser queue state query failed.'
         }
@@ -422,12 +427,14 @@ FROM mail_contents;
     } catch {
     }
     Remove-Item Env:MAILWISP_ENV_FILE -ErrorAction SilentlyContinue
-    Remove-Item Env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
+    Remove-Item Env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
+    Remove-Item Env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_WEB_DOMAIN -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_SMTP_HOST -ErrorAction SilentlyContinue
-    Remove-Item Env:MAILWISP_MAIL_DOMAIN -ErrorAction SilentlyContinue
+    Remove-Item Env:MAILWISP_PUBLIC_DOMAINS -ErrorAction SilentlyContinue
+    Remove-Item Env:MAILWISP_LMTP_MAX_MESSAGE_BYTES -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_CERT_NAME -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_BENCH_HTTP_PORT -ErrorAction SilentlyContinue
     Remove-Item Env:MAILWISP_BENCH_LMTP_PORT -ErrorAction SilentlyContinue

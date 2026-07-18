@@ -41,7 +41,7 @@ Canonical入口是`scripts/benchmark-compose.ps1`。脚本使用临时Compose Pr
 
 输出目录必须位于仓库`artifacts/`的子目录内；重跑同一目录会覆盖已知结果文件，防止NDJSON或旧并发结果跨Run污染。带UTC时间戳的历史`diagnostics-*`目录会保留，便于比较失败现场。
 
-启动或运行失败时，脚本会在清理隔离Stack前写入带UTC时间戳的`diagnostics-*`目录，其中包含失败位置、Compose状态、`postgres/migrate/app`日志与容器Inspect结果。
+启动或运行失败时，脚本会在清理隔离Stack前写入带UTC时间戳的`diagnostics-*`目录，其中包含失败位置、Compose状态、`postgres/db-provision/migrate/app`日志与容器Inspect结果。
 
 GitHub Actions在Linux共享Runner上执行缩短但同构的回归曲线（并发`1/4/16/32`，读取`1000`、创建`100`、LMTP`100`），无论成功或失败都上传14天Artifact。该Job检查可重复启动、零失败和Parser Queue排空，不设置易受共享宿主机噪声影响的绝对QPS阈值。
 

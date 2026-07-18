@@ -5,11 +5,17 @@ x-app-build: &app-build
   dockerfile: deploy/compose/Dockerfile
   target: app
 
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-app-environment: &app-environment
   MAILWISP_HTTP_ADDR: ":8080"
   MAILWISP_LMTP_ADDR: ":2525"
-  MAILWISP_POSTGRES_DSN: postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable
-  MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  MAILWISP_POSTGRES_DSN: postgres://mailwisp_app@postgres:5432/mailwisp?sslmode=disable
+  MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_app_password
   MAILWISP_BROWSER_SESSION_KEY_FILE: /run/secrets/browser_session_key
   MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content
 
@@ -19,16 +25,16 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: mailwisp
-      POSTGRES_USER: mailwisp
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_USER: mailwisp_owner
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_owner_password
     secrets:
-      - postgres_password
+      - postgres_owner_password
     volumes:
       - postgres_data:/var/lib/postgresql
     tmpfs:
       - /run/postgresql:size=16m,mode=0770
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mailwisp -d mailwisp"]
+      test: ["CMD-SHELL", "pg_isready -U mailwisp_owner -d mailwisp"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -36,24 +42,67 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - backend
+      - database
+    stop_grace_period: 60s
+    logging: *bounded-logging
     deploy:
       resources:
         limits:
           memory: 768m
           cpus: "2.0"
 
+  db-provision:
+    image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    entrypoint: ["/bin/sh", "/usr/local/bin/mailwisp-provision-runtime-role"]
+    user: postgres
+    environment:
+      POSTGRES_DB: mailwisp
+      POSTGRES_USER: mailwisp_owner
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGSSLMODE: disable
+      MAILWISP_POSTGRES_OWNER_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      MAILWISP_POSTGRES_APP_PASSWORD_FILE: /run/secrets/postgres_app_password
+    secrets:
+      - postgres_owner_password
+      - postgres_app_password
+    volumes:
+      - ./postgres/provision-runtime-role.sh:/usr/local/bin/mailwisp-provision-runtime-role:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - database
+    restart: "no"
+    logging: *bounded-logging
+    deploy:
+      resources:
+        limits:
+          memory: 96m
+          cpus: "1.0"
+          pids: 64
+
   migrate:
     image: mailwisp/app:${MAILWISP_IMAGE_TAG:-local}
     build: *app-build
     command: ["migrate"]
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      MAILWISP_POSTGRES_DSN: postgres://mailwisp_owner@postgres:5432/mailwisp?sslmode=disable
+      MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_owner_password
+      MAILWISP_BROWSER_SESSION_KEY_FILE: ""
     secrets:
-      - postgres_password
-      - browser_session_key
+      - postgres_owner_password
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-provision:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -62,8 +111,9 @@ services:
     cap_drop:
       - ALL
     networks:
-      - backend
+      - database
     restart: "no"
+    logging: *bounded-logging
 
   app:
     image: mailwisp/app:${MAILWISP_IMAGE_TAG:-local}
@@ -74,9 +124,11 @@ services:
         required: true
     environment:
       <<: *app-environment
+      MAILWISP_PUBLIC_DOMAINS: ${MAILWISP_PUBLIC_DOMAINS:?set MAILWISP_PUBLIC_DOMAINS}
+      MAILWISP_LMTP_MAX_MESSAGE_BYTES: ${MAILWISP_LMTP_MAX_MESSAGE_BYTES:?set MAILWISP_LMTP_MAX_MESSAGE_BYTES}
       MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE: /run/secrets/create_quota_hmac_key
     secrets:
-      - postgres_password
+      - postgres_app_password
       - browser_session_key
       - create_quota_hmac_key
     volumes:
@@ -98,8 +150,11 @@ services:
     cap_drop:
       - ALL
     networks:
-      - backend
+      - database
+      - lmtp
       - frontend
+    stop_grace_period: 30s
+    logging: *bounded-logging
     deploy:
       resources:
         limits:
@@ -116,11 +171,11 @@ services:
     profiles: ["maintenance"]
     command: ["maintenance-command-required"]
     environment:
-      MAILWISP_POSTGRES_DSN: postgres://mailwisp@postgres:5432/mailwisp?sslmode=disable
-      MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MAILWISP_POSTGRES_DSN: postgres://mailwisp_owner@postgres:5432/mailwisp?sslmode=disable
+      MAILWISP_POSTGRES_PASSWORD_FILE: /run/secrets/postgres_owner_password
       MAILWISP_CONTENT_ROOT: /var/lib/mailwisp/content
     secrets:
-      - postgres_password
+      - postgres_owner_password
     volumes:
       - content_data:/var/lib/mailwisp/content
       - ${MAILWISP_BACKUP_ROOT_SOURCE:-./backups}:/backups
@@ -135,8 +190,9 @@ services:
     cap_drop:
       - ALL
     networks:
-      - backend
+      - database
     restart: "no"
+    logging: *bounded-logging
     deploy:
       resources:
         limits:
@@ -172,6 +228,14 @@ services:
       - no-new-privileges:true
     networks:
       - frontend
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider --no-check-certificate https://127.0.0.1/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+    logging: *bounded-logging
     deploy:
       resources:
         limits:
@@ -187,7 +251,8 @@ services:
     restart: unless-stopped
     environment:
       MAILWISP_SMTP_HOST: ${MAILWISP_SMTP_HOST:?set MAILWISP_SMTP_HOST}
-      MAILWISP_MAIL_DOMAIN: ${MAILWISP_MAIL_DOMAIN:?set MAILWISP_MAIL_DOMAIN}
+      MAILWISP_PUBLIC_DOMAINS: ${MAILWISP_PUBLIC_DOMAINS:?set MAILWISP_PUBLIC_DOMAINS}
+      MAILWISP_LMTP_MAX_MESSAGE_BYTES: ${MAILWISP_LMTP_MAX_MESSAGE_BYTES:?set MAILWISP_LMTP_MAX_MESSAGE_BYTES}
       MAILWISP_CERT_NAME: ${MAILWISP_CERT_NAME:?set MAILWISP_CERT_NAME}
     ports:
       - "25:25"
@@ -198,7 +263,7 @@ services:
       app:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "postfix status"]
+      test: ["CMD-SHELL", "postfix status && nc -z -w 3 app 2525"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -206,8 +271,10 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - backend
+      - lmtp
       - smtp_ingress
+    stop_grace_period: 60s
+    logging: *bounded-logging
     deploy:
       resources:
         limits:
@@ -225,10 +292,13 @@ services:
       - acme_webroot:/var/www/certbot
     networks:
       - frontend
+    logging: *bounded-logging
 
 secrets:
-  postgres_password:
-    file: ${MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE:-./secrets/postgres_password.txt}
+  postgres_owner_password:
+    file: ${MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE:-./secrets/postgres_owner_password.txt}
+  postgres_app_password:
+    file: ${MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE:-./secrets/postgres_app_password.txt}
   browser_session_key:
     file: ${MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE:-./secrets/browser_session_key.txt}
   create_quota_hmac_key:
@@ -242,7 +312,9 @@ volumes:
   acme_webroot:
 
 networks:
-  backend:
+  database:
+    internal: true
+  lmtp:
     internal: true
   frontend:
   smtp_ingress:

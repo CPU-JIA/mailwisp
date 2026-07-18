@@ -4,12 +4,13 @@
 
 ## 离线一致性备份
 
-1. 确认独立加密备份已覆盖`.env`、`mailwisp.env`、三个Secret文件、TLS证书和DNS配置。MailWisp Bundle不包含这些内容。
+1. 确认独立加密备份已覆盖`.env`、`mailwisp.env`、四个Secret文件、TLS证书和DNS配置。四个Secret分别是PostgreSQL Owner密码、Runtime App密码、Browser Session Key和Create Quota HMAC Key；MailWisp Bundle不包含这些内容。
 2. 在维护窗口前从同一个已审查Commit构建固定镜像并记录镜像ID；任何构建、拉取或配置检查失败都不得进入停机窗口：
 
 ```bash
 docker compose --profile maintenance config --quiet
 docker compose -f backup-verifier.compose.yaml config --quiet
+sh preflight.sh
 docker compose build --pull app maintenance edge postfix
 docker compose images --format json > reviewed-compose-images.json
 ```
@@ -19,7 +20,9 @@ docker compose images --format json > reviewed-compose-images.json
 ```bash
 docker compose exec postfix postqueue -p
 docker compose stop edge postfix
-docker compose run --rm --no-deps --entrypoint postqueue postfix -p
+queue_output=$(docker compose run --rm --no-deps --entrypoint postqueue postfix -p)
+printf '%s\n' "$queue_output"
+printf '%s\n' "$queue_output" | grep -Fq 'Mail queue is empty' || exit 1
 docker compose stop app
 bundle="/backups/mailwisp-$(date -u +%Y%m%dT%H%M%SZ)"
 docker compose run --rm --no-deps maintenance backup "$bundle"
@@ -28,6 +31,8 @@ docker compose -f backup-verifier.compose.yaml run --rm --no-deps backup-verifie
 ```
 
 `backup verify`是Bundle完整性校验：它严格重读布局、Manifest、Size与SHA-256；实际可恢复性仍由隔离Restore演练证明。
+
+停止后的第二次Queue检查必须匹配`Mail queue is empty`并以非零退出码阻断后续步骤；仅把`postqueue -p`输出打印到日志不构成Fail-closed备份门禁。
 
 4. 把完整三文件Bundle复制到独立主机或Object Storage，保留加密、Object Lock/Versioning与生命周期策略；同机`./backups`不构成灾备。
 5. 备份窗口结束后恢复服务，显式撤销Host防火墙和云安全组的`25/tcp`临时阻断，再检查Readiness、Queue和外部SMTP：
@@ -65,7 +70,7 @@ docker compose -p "$restore_project" exec -T app \
 1. 完成离线Bundle并执行`backup verify`，把Bundle复制到独立存储。
 2. 记录当前镜像ID：`docker compose images --format json`。
 3. 使用审查后的Commit构建新镜像，执行`docker compose config --quiet`与完整演练。
-4. 停入口和App，运行一次性Migration，再启动App、Edge和Postfix。
+4. 停入口和App，运行一次性`db-provision`与Migration，再启动App、Edge和Postfix；`db-provision`会收敛Runtime Role密码、属性及已有表权限，但不会修改业务数据。
 5. 验证Readiness、Canary收件、附件、Queue、Parser、Retention和Metrics。
 
 应用镜像回滚只有在新Migration被明确证明向后兼容时才允许直接切回旧Tag。若Schema不兼容或状态不明，停止新栈，从升级前Bundle恢复到新的空Project，再按“隔离恢复与切换”执行；禁止对已前向迁移的数据库盲目运行旧二进制。
@@ -73,6 +78,8 @@ docker compose -p "$restore_project" exec -T app \
 ## 告警起点
 
 [`prometheus-alerts.example.yml`](prometheus-alerts.example.yml)提供低基数应用告警起点，并由固定Digest的Prometheus 3.13.1 `promtool check rules`验证YAML与PromQL；它不会自动部署Prometheus/Grafana。维护者还必须在Host/云监控配置：
+
+规则会在持久物理删除队列`mailwisp_content_deletion_pending`连续15分钟不归零时告警。该状态表示Inbox/Message已在数据库中完成逻辑删除，但Raw MIME仍等待安全重试；不得通过手工清空队列表来消除告警，应先检查Content Volume权限、磁盘与App日志并让Retention重试完成。
 
 - HTTPS `/readyz`连续2分钟失败：Critical。
 - Docker数据目录或Content Volume剩余空间低于`max(2 × MAILWISP_LMTP_MAX_MESSAGE_BYTES, MAILWISP_CONTENT_MIN_FREE_BYTES)`：Warning；低于配置水位：Critical。
@@ -82,6 +89,8 @@ docker compose -p "$restore_project" exec -T app \
 - 最近一次灾备演练超过30天：Warning；超过45天：Critical。
 
 阈值是个人服务器的保守起点，应依据容量Benchmark和正常基线调整，但不得关闭Readiness、磁盘、Queue、证书和备份新鲜度五类告警。
+
+Compose已把每个容器的本地`json-file`日志限制为`10m × 3`。Postfix Envelope与远端IP、HTTP Request ID和错误上下文仍应按敏感运维元数据管理；定期核对Docker日志实际占用与Host访问权限，集中采集时采用短期Retention和字段脱敏，禁止采集Raw MIME、Cookie、Authorization或Secret。
 
 ## 自动演练
 

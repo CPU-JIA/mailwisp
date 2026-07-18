@@ -1,6 +1,6 @@
 # MailWisp Docker Compose Deployment
 
-Docker Compose是MailWisp默认、主推荐的单机部署方式。它固定应用构建链、Nginx、Postfix、PostgreSQL与Certbot镜像Digest，只公开`25/tcp`、`80/tcp`和`443/tcp`；Go HTTP、LMTP和PostgreSQL仅存在于Compose内部网络。Postfix单独加入非内部`SMTP ingress`网络以接收发布端口流量，并通过内部backend把邮件交给LMTP；数据库与App不会加入SMTP入口网络。
+Docker Compose是MailWisp默认、主推荐的单机部署方式。它固定应用构建链、Nginx、Postfix、PostgreSQL与Certbot镜像Digest，只公开`25/tcp`、`80/tcp`和`443/tcp`；Go HTTP、LMTP和PostgreSQL仅存在于Compose内部网络。Postfix单独加入非内部`SMTP ingress`网络接收公网流量，再通过隔离的内部`lmtp`网络交给App；PostgreSQL只加入内部`database`网络，Edge只加入`frontend`网络。
 
 Host-native配置保留在`deploy/reference/`，只作为需要深度系统集成时的辅助Profile。
 
@@ -11,16 +11,29 @@ cd deploy/compose
 cp .env.example .env
 cp mailwisp.env.example mailwisp.env
 install -d -m 0700 secrets backups
-openssl rand -base64 32 > secrets/postgres_password.txt
+openssl rand -base64 32 > secrets/postgres_owner_password.txt
+openssl rand -base64 32 > secrets/postgres_app_password.txt
 openssl rand -base64 32 > secrets/browser_session_key.txt
 openssl rand -base64 32 > secrets/create_quota_hmac_key.txt
-chmod 0600 secrets/postgres_password.txt
-chmod 0600 secrets/browser_session_key.txt
-chmod 0600 secrets/create_quota_hmac_key.txt
+chmod 0444 secrets/postgres_owner_password.txt \
+  secrets/postgres_app_password.txt \
+  secrets/browser_session_key.txt \
+  secrets/create_quota_hmac_key.txt
 sudo chown -R 65532:65532 backups
 ```
 
-编辑`.env`中的Web域名、SMTP Host、收件域名和证书名称；编辑`mailwisp.env`中的公开域名与LMTP Host。Browser Session Key与Create Quota HMAC Key通过独立Docker Secret文件注入，不写入普通环境变量或Git。
+`secrets/`目录保持`0700`，Secret文件在目录内使用`0444`，是因为Linux Docker Compose以只读Bind Mount实现本地Secret，而App以Non-root UID运行；目录权限阻止其他Host用户遍历，容器隔离则确保每个服务只能看到显式授予的Secret。不得把Secret目录改为组或全局可遍历。
+
+编辑`.env`中的Web域名、SMTP Host、收件域名、最大邮件字节数和证书名称；编辑`mailwisp.env`中的应用配置。PostgreSQL Owner与Runtime App使用不同密码；Browser Session Key与Create Quota HMAC Key也通过独立Docker Secret文件注入，不写入普通环境变量或Git。
+
+配置完成后先验证锁定工具链和目标平台：
+
+```bash
+sh preflight.sh
+docker compose config --quiet
+```
+
+Canonical Profile要求Linux amd64 Docker Engine与`versions.lock`中精确固定的Docker Compose版本；不接受浮动版本或仅凭“配置可以解析”替代版本校验。
 
 匿名创建先经过进程内瞬时Token Bucket，再经过PostgreSQL持久UTC日配额。默认每个HMAC客户端身份每天100次：
 
@@ -47,6 +60,14 @@ MAILWISP_CONTENT_MIN_FREE_BYTES=1073741824
 
 MailWisp会在LMTP DATA前预检，并在Content Store写入前为一个最大消息窗口执行并发预留。磁盘压力返回`452 4.3.1`，由Postfix保留Queue并重投。部署者仍应监控Docker数据目录；不得把该水位设为小于`MAILWISP_LMTP_MAX_MESSAGE_BYTES`。
 
+Raw Source与附件等重读取使用独立有界并发，Reference Profile默认最多4个并行重读取：
+
+```dotenv
+MAILWISP_HEAVY_READ_CONCURRENCY=4
+```
+
+该值用于限制文件描述符、磁盘随机读取和大响应占用，不应按HTTP总并发盲目放大；只有容量Benchmark与目标磁盘测量证明需要时才调整。
+
 DNS至少包含Web/SMTP Host的A/AAAA记录和收件域名MX记录，云厂商必须允许公网25端口。
 
 ## 2. 首次证书
@@ -72,7 +93,9 @@ docker compose ps
 docker compose logs --tail=100 app postfix edge
 ```
 
-`migrate`是一次性服务；`app`只有在Migration成功后启动，Edge和Postfix只有在App Readiness通过后启动。默认不运行Redis、PgBouncer、消息队列或生产Node.js。
+`db-provision`先以一次性Non-root服务幂等创建或收敛最小权限Runtime Role，并对已有表补齐权限；`migrate`随后只使用Owner凭据执行Migration。`app`只有在两者成功后才启动，Edge和Postfix只有在App Readiness通过后启动。该顺序同时覆盖全新数据卷和已有MailWisp数据卷，避免把PostgreSQL初始化目录误当作升级机制。默认不运行Redis、PgBouncer、消息队列或生产Node.js。
+
+Postfix在SMTP RCPT阶段通过LMTP地址验证拒绝未知Recipient，避免接受后再向伪造Sender生成Backscatter。正负验证缓存只保留秒级窗口，既限制临时邮箱创建/删除后的陈旧判断，也避免每个连续RCPT都重复访问App；LMTP不可用时RCPT返回临时失败。
 
 从正式Release Bundle部署时，必须先在Bundle根目录验证Checksum并加载随包镜像，再复制`.env.example`：
 
@@ -90,7 +113,7 @@ docker compose config --quiet
 docker compose up -d --no-build
 ```
 
-Release Bundle的`.env.example`通过`COMPOSE_FILE=compose.yaml:release.compose.yaml`启用预构建Overlay；该Overlay用`!reset null`删除`migrate`、`app`、`maintenance`、`edge`与`postfix`的全部`build`，并设置`pull_policy: never`。因此Release运行路径不能因源码缺失或Registry波动回退到未审查构建或拉取同名远程Tag；本地镜像缺失必须直接失败。Source Checkout不得复制这条`COMPOSE_FILE`设置，两种路径不能混用。完整步骤见[Release Bundle说明](../../docs/release-bundle.md)。
+Release Bundle的`.env.example`通过`COMPOSE_FILE=compose.yaml:release.compose.yaml`启用预构建Overlay；该Overlay用`!reset null`删除`migrate`、`app`、`maintenance`、`edge`与`postfix`的全部`build`，并设置`pull_policy: never`。因此Release运行路径不能因源码缺失或Registry波动回退到未审查构建或拉取同名远程Tag；本地镜像缺失必须直接失败。加载镜像前后都应执行`sh preflight.sh`。Source Checkout不得复制这条`COMPOSE_FILE`设置，两种路径不能混用。完整步骤见[Release Bundle说明](../../docs/release-bundle.md)。
 
 Docker Hub链路较慢时，应在Host Docker daemon配置可信`registry-mirrors`或组织级Pull-through Cache。MailWisp仍使用官方镜像名和锁定Digest，不在Compose中硬编码地域Mirror，也不接受只保留Tag、无法证明与原Digest一致的重打包镜像。Mirror只改变传输路径，不改变镜像身份。
 
@@ -101,6 +124,8 @@ docker compose exec app wget -qO- http://127.0.0.1:8080/metrics
 ```
 
 长期采集应让既有Prometheus或兼容Collector加入Compose内部Network，不得把`/metrics`直接暴露到公网。
+
+所有服务使用Docker `json-file`有界日志，每个容器最多保留3个10 MiB文件。Postfix日志仍会包含远端IP、Envelope Sender/Recipient与Queue ID，这些属于敏感运维元数据；Host上的Docker日志目录必须限制管理员访问，外送Collector必须设置更短保留期和字段级脱敏，不得把Raw MIME、Authorization、Cookie或Secret采入日志。
 
 ## 4. 证书续签
 
@@ -124,7 +149,9 @@ docker compose exec postfix postfix reload
 ```bash
 docker compose exec postfix postqueue -p
 docker compose stop edge postfix
-docker compose run --rm --no-deps --entrypoint postqueue postfix -p
+queue_output=$(docker compose run --rm --no-deps --entrypoint postqueue postfix -p)
+printf '%s\n' "$queue_output"
+printf '%s\n' "$queue_output" | grep -Fq 'Mail queue is empty' || exit 1
 docker compose stop app
 docker compose run --rm --no-deps maintenance backup /backups/mailwisp-$(date +%Y%m%d-%H%M%S)
 docker compose -f backup-verifier.compose.yaml run --rm --no-deps backup-verifier \

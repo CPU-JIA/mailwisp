@@ -206,20 +206,24 @@ try {
         [System.IO.Directory]::CreateDirectory($composeFixtureRoot) | Out-Null
         try {
             $composeEnvironment = Join-Path $composeFixtureRoot 'mailwisp.env'
-            $composePassword = Join-Path $composeFixtureRoot 'postgres_password.txt'
+            $composeOwnerPassword = Join-Path $composeFixtureRoot 'postgres_owner_password.txt'
+            $composeAppPassword = Join-Path $composeFixtureRoot 'postgres_app_password.txt'
             $composeBrowserSessionKey = Join-Path $composeFixtureRoot 'browser_session_key.txt'
             $composeCreateQuotaKey = Join-Path $composeFixtureRoot 'create_quota_hmac_key.txt'
             [System.IO.File]::WriteAllText($composeEnvironment, "MAILWISP_PUBLIC_DOMAINS=example.com`nMAILWISP_LMTP_HOSTNAME=mx.example.com`n")
-            [System.IO.File]::WriteAllText($composePassword, "compose-verification-password`n")
+            [System.IO.File]::WriteAllText($composeOwnerPassword, "compose-owner-verification-password`n")
+            [System.IO.File]::WriteAllText($composeAppPassword, "compose-app-verification-password`n")
             [System.IO.File]::WriteAllText($composeBrowserSessionKey, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=`n")
             [System.IO.File]::WriteAllText($composeCreateQuotaKey, "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=`n")
             $env:MAILWISP_ENV_FILE = $composeEnvironment
-            $env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE = $composePassword
+            $env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE = $composeOwnerPassword
+            $env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE = $composeAppPassword
             $env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE = $composeBrowserSessionKey
             $env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE = $composeCreateQuotaKey
             $env:MAILWISP_WEB_DOMAIN = 'mail.example.com'
             $env:MAILWISP_SMTP_HOST = 'mx.example.com'
-            $env:MAILWISP_MAIL_DOMAIN = 'example.com'
+            $env:MAILWISP_PUBLIC_DOMAINS = 'example.com'
+            $env:MAILWISP_LMTP_MAX_MESSAGE_BYTES = '26214400'
             $env:MAILWISP_CERT_NAME = 'mail.example.com'
             $composeFile = Join-Path $repositoryRoot 'deploy/compose/compose.yaml'
             $backupVerifierComposeFile = Join-Path $repositoryRoot 'deploy/compose/backup-verifier.compose.yaml'
@@ -234,12 +238,14 @@ try {
             }
         } finally {
             Remove-Item Env:MAILWISP_ENV_FILE -ErrorAction SilentlyContinue
-            Remove-Item Env:MAILWISP_POSTGRES_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_POSTGRES_OWNER_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_POSTGRES_APP_PASSWORD_FILE_SOURCE -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_BROWSER_SESSION_KEY_FILE_SOURCE -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_CREATE_QUOTA_HMAC_KEY_FILE_SOURCE -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_WEB_DOMAIN -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_SMTP_HOST -ErrorAction SilentlyContinue
-            Remove-Item Env:MAILWISP_MAIL_DOMAIN -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_PUBLIC_DOMAINS -ErrorAction SilentlyContinue
+            Remove-Item Env:MAILWISP_LMTP_MAX_MESSAGE_BYTES -ErrorAction SilentlyContinue
             Remove-Item Env:MAILWISP_CERT_NAME -ErrorAction SilentlyContinue
             if ([System.IO.Directory]::Exists($composeFixtureRoot)) {
                 [System.IO.Directory]::Delete($composeFixtureRoot, $true)

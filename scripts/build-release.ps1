@@ -155,7 +155,8 @@ try {
     foreach ($staleRoot in @(
         $artifactRoot,
         (Join-Path $repositoryRoot 'artifacts/release-verification'),
-        (Join-Path $repositoryRoot 'artifacts/release-e2e')
+        (Join-Path $repositoryRoot 'artifacts/release-e2e'),
+        (Join-Path $repositoryRoot 'artifacts/release-dr')
     )) {
         Remove-MailWispArtifactDirectory -RepositoryRoot $repositoryRoot -Path $staleRoot
     }
@@ -199,9 +200,9 @@ try {
         Copy-ReleaseEntry -SourceRoot (Join-Path $repositoryRoot 'deploy/reference') -DestinationRoot $hostDeployRoot -Entry $entry
     }
     foreach ($entry in @(
-        'README.md', 'OPERATIONS.md', 'prometheus-alerts.example.yml', 'versions.lock', 'Dockerfile',
+        'README.md', 'OPERATIONS.md', 'prometheus-alerts.example.yml', 'versions.lock', 'preflight.sh', 'Dockerfile',
         'compose.yaml', 'release.compose.yaml', 'backup-verifier.compose.yaml', 'backup-verifier.release.compose.yaml',
-        '.env.example', 'mailwisp.env.example', 'nginx', 'postfix'
+        '.env.example', 'mailwisp.env.example', 'nginx', 'postfix', 'postgres'
     )) {
         Copy-ReleaseEntry -SourceRoot (Join-Path $repositoryRoot 'deploy/compose') -DestinationRoot $composeDeployRoot -Entry $entry
     }

@@ -26,4 +26,4 @@ Canonical Capability适合CLI和自动化，但浏览器长期把Bearer明文保
 
 ## 运维影响
 
-Reference环境必须生成32字节随机Key并以Base64或Base64URL写入受保护的EnvironmentFile。Key轮换当前采用中断现有浏览器Session的简单语义，符合临时邮箱产品边界。
+Reference环境必须生成32字节随机Key并以Base64或Base64URL保存。Canonical Compose通过只挂载给App的`browser_session_key` Secret文件注入；Host-native辅助Profile可使用权限受控的EnvironmentFile或`MAILWISP_BROWSER_SESSION_KEY_FILE`。Key轮换当前采用中断现有浏览器Session的简单语义，符合临时邮箱产品边界。

@@ -1,6 +1,6 @@
 # 前端Framework Technical Spike计划与阶段性判断
 
-状态：第一轮Technical Spike完成，Vue 3进入推荐候选
+状态：历史Technical Spike（Vue 3已由ADR 0003与0010正式接受并投入生产控制台）
 日期：2026-07-14
 
 ## 固定比较场景
@@ -196,4 +196,4 @@ Playwright 1.61.1
 
 ## 当前结论
 
-Vue 3 + TypeScript是当前最平衡且真实可实现的前端方案。最终ADR仍需补充完整i18n、Router、Form、Accessibility与截图回归Spike，但第一轮证据已经足以停止在四个Framework之间反复摇摆；后续验证聚焦Vue能否满足产品质量门槛，而不是继续做无边界框架比较。
+Vue 3 + TypeScript是当前最平衡且真实可实现的前端方案。后续ADR 0003与0010已正式接受并实现中文默认/英文切换、主题、错误与分页状态、无权限邮件Sandbox、附件、Raw Source、键盘交互及Mock/Production/Disaster Recovery三层Playwright；本历史Spike不再保留框架选型待办。
