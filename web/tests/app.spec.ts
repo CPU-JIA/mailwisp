@@ -38,6 +38,7 @@ test('does not let a late session restore overwrite a user-created inbox', async
 test('downloads an owned attachment from message detail', async ({ page }) => {
   const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb12', address: 'demo@example.com', status: 'active', expires_at: '2026-07-16T00:00:00Z', created_at: '2026-07-15T00:00:00Z' }
   const summary = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb13', envelope_sender: 'sender@example.com', subject: 'Attachment', preview: 'See file', received_at: '2026-07-15T00:00:00Z', parse_status: 'parsed', size_bytes: 128, has_attachments: true, seen: false }
+  let seenUpdates = 0
   await page.route('**/api/v1/session', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf' } }) })
@@ -49,6 +50,13 @@ test('downloads an owned attachment from message detail', async ({ page }) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [summary] }) })
   })
   await page.route(`**/api/v1/inboxes/me/messages/${summary.id}`, async (route) => {
+    if (route.request().method() === 'PATCH') {
+      expect(route.request().postDataJSON()).toEqual({ seen: true })
+      expect(route.request().headers()['x-mailwisp-csrf']).toBe('csrf')
+      seenUpdates++
+      await route.fulfill({ status: 204 })
+      return
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...summary, header_message_id: '', from: [], to: [], cc: [], sent_at: null, text: 'See file', html_source: '<img src="cid:logo@example.com">', attachments: [{ part_path: '2', file_name: 'report.txt', content_type: 'text/plain', disposition: 'attachment', content_id: '', size_bytes: 10 }, { part_path: '3', file_name: 'logo.png', content_type: 'image/png', disposition: 'inline', content_id: 'logo@example.com', size_bytes: 4 }], warnings: [] } }) })
   })
   await page.route(`**/api/v1/inboxes/me/messages/${summary.id}/attachments/2`, async (route) => {
@@ -61,12 +69,58 @@ test('downloads an owned attachment from message detail', async ({ page }) => {
   await page.locator('#capability-token').fill('wisp_cap_v1_test')
   await page.getByRole('button', { name: '打开收件箱' }).click()
   await page.getByRole('button', { name: /Attachment/ }).click()
-  await page.getByRole('tab', { name: '安全 HTML' }).click()
+  await expect.poll(() => seenUpdates).toBe(1)
+  const textTab = page.getByRole('tab', { name: '纯文本' })
+  const htmlTab = page.getByRole('tab', { name: '安全 HTML' })
+  await expect(textTab).toHaveAttribute('aria-selected', 'true')
+  await expect(textTab).toHaveAttribute('aria-controls', 'message-panel-text')
+  await textTab.focus()
+  await textTab.press('ArrowRight')
+  await expect(htmlTab).toBeFocused()
+  await expect(htmlTab).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'message-tab-html')
+  await expect(page.locator('iframe')).toHaveAttribute('title', '安全 HTML 邮件：Attachment')
   await expect.poll(async () => page.locator('iframe').getAttribute('srcdoc')).toContain('data:image/png;base64,')
   const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: '下载' }).first().click()
+  await page.getByRole('listitem').filter({ hasText: 'report.txt' }).getByRole('button', { name: '下载', exact: true }).click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe('report.txt')
+})
+
+test('keeps terminal parse failures inspectable through an owned Raw Source download', async ({ page }) => {
+  const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb22', address: 'failed@example.com', status: 'active', expires_at: '2026-07-17T00:00:00Z', created_at: '2026-07-16T00:00:00Z' }
+  const summary = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb23', envelope_sender: 'sender@example.com', subject: '', preview: '', received_at: '2026-07-16T02:00:00Z', parse_status: 'failed', size_bytes: 30, has_attachments: false, seen: false }
+  const raw = 'Subject: malformed\r\n\r\nraw bytes'
+  await page.route('**/api/v1/session', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf' } }) })
+      return
+    }
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unauthenticated', message: 'no session', request_id: 'e2e' } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [summary] }) })
+  })
+  await page.route(`**/api/v1/inboxes/me/messages/${summary.id}/source`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'message/rfc822', headers: { 'Content-Disposition': `attachment; filename="${summary.id}.eml"` }, body: raw })
+  })
+  await page.route(`**/api/v1/inboxes/me/messages/${summary.id}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...summary, header_message_id: '', from: [], to: [], cc: [], sent_at: null, text: '', html_source: '', attachments: [], warnings: [] } }) })
+  })
+  await page.goto('/')
+  await page.locator('#capability-token').fill('wisp_cap_v1_failed')
+  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await page.locator('.message-row').click()
+  await expect(page.getByText('这封邮件无法安全解析，但原始RFC 822邮件仍可下载检查。')).toBeVisible()
+  await expect(page.getByText('邮件正在解析，稍后刷新即可查看正文。')).toHaveCount(0)
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载原始邮件' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe(`${summary.id}.eml`)
+  const stream = await download.createReadStream()
+  const chunks: Buffer[] = []
+  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  expect(Buffer.concat(chunks).toString('utf8')).toBe(raw)
 })
 
 test('loads every cursor page without replacing newer messages', async ({ page }) => {
@@ -179,4 +233,104 @@ test('does not restart inbox polling after load-more is aborted by message detai
   await expect(page.getByRole('heading', { name: 'Open during pagination' })).toBeVisible()
   await page.clock.fastForward(11_000)
   expect(listRequests).toBe(2)
+})
+
+test('waits for server-confirmed session deletion before leaving the inbox', async ({ page }) => {
+  const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb20', address: 'logout@example.com', status: 'active', expires_at: '2026-07-17T00:00:00Z', created_at: '2026-07-16T00:00:00Z' }
+  let deleteStarted = false
+  let releaseDelete: (() => void) | undefined
+  const deleteGate = new Promise<void>((resolve) => { releaseDelete = resolve })
+  await page.route('**/api/v1/session', async (route) => {
+    const method = route.request().method()
+    if (method === 'POST') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf-logout' } }) })
+      return
+    }
+    if (method === 'DELETE') {
+      deleteStarted = true
+      expect(route.request().headers()['x-mailwisp-csrf']).toBe('csrf-logout')
+      await deleteGate
+      await route.fulfill({ status: 204 })
+      return
+    }
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unauthenticated', message: 'no session', request_id: 'e2e' } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+  await page.goto('/')
+  await page.locator('#capability-token').fill('wisp_cap_v1_logout')
+  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await expect(page.getByRole('heading', { name: inbox.address })).toBeVisible()
+  await page.getByRole('button', { name: '离开邮箱' }).click()
+  await expect.poll(() => deleteStarted).toBe(true)
+  await expect(page.getByRole('button', { name: '正在安全离开…' })).toBeDisabled()
+  await expect(page.getByRole('heading', { name: inbox.address })).toBeVisible()
+  await expect(page.getByRole('button', { name: '创建临时邮箱' })).toHaveCount(0)
+  releaseDelete?.()
+  await expect(page.getByRole('button', { name: '创建临时邮箱' })).toBeVisible()
+})
+
+test('keeps a failed session logout recoverable without pretending it succeeded', async ({ page }) => {
+  const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb21', address: 'retry-logout@example.com', status: 'active', expires_at: '2026-07-17T00:00:00Z', created_at: '2026-07-16T00:00:00Z' }
+  let deleteAttempts = 0
+  await page.route('**/api/v1/session', async (route) => {
+    const method = route.request().method()
+    if (method === 'POST') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf-retry' } }) })
+      return
+    }
+    if (method === 'DELETE') {
+      deleteAttempts++
+      expect(route.request().headers()['x-mailwisp-csrf']).toBe('csrf-retry')
+      if (deleteAttempts === 1) {
+        await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'internal_error', message: 'retry', request_id: 'logout-retry' } }) })
+      } else {
+        await route.fulfill({ status: 204 })
+      }
+      return
+    }
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unauthenticated', message: 'no session', request_id: 'e2e' } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+  await page.goto('/')
+  await page.locator('#capability-token').fill('wisp_cap_v1_retry_logout')
+  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await page.getByRole('button', { name: '离开邮箱' }).click()
+  await expect(page.getByRole('heading', { name: '服务器暂时无法完成请求。请稍后再试。' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '创建临时邮箱' })).toHaveCount(0)
+  await page.getByRole('button', { name: '重新尝试' }).click()
+  await expect(page.getByRole('button', { name: '创建临时邮箱' })).toBeVisible()
+  expect(deleteAttempts).toBe(2)
+})
+
+test('keeps untrusted long message text inside a narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 })
+  const longText = 'x'.repeat(320)
+  const inbox = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb30', address: 'narrow@example.com', status: 'active', expires_at: '2026-07-19T00:00:00Z', created_at: '2026-07-18T00:00:00Z' }
+  const summary = { id: '018f26e5-8f04-7b44-8ba2-4a8f434dcb31', envelope_sender: `${longText}@example.com`, subject: longText, preview: longText, received_at: '2026-07-18T02:00:00Z', parse_status: 'parsed', size_bytes: 128, has_attachments: true, seen: true }
+  await page.route('**/api/v1/session', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { inbox, expires_at: inbox.expires_at, csrf_token: 'csrf' } }) })
+      return
+    }
+    await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: { code: 'unauthenticated', message: 'no session', request_id: 'e2e' } }) })
+  })
+  await page.route('**/api/v1/inboxes/me/messages?*', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [summary] }) })
+  })
+  await page.route(`**/api/v1/inboxes/me/messages/${summary.id}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...summary, header_message_id: '', from: [], to: [], cc: [], sent_at: null, text: longText, html_source: '', attachments: [{ part_path: '2', file_name: `${longText}.txt`, content_type: 'text/plain', disposition: 'attachment', content_id: '', size_bytes: 10 }], warnings: [] } }) })
+  })
+
+  await page.goto('/')
+  await page.locator('#capability-token').fill('wisp_cap_v1_long_text')
+  await page.getByRole('button', { name: '打开收件箱' }).click()
+  await expect(page.locator('.message-row')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+  await page.locator('.message-row').click()
+  await expect(page.locator('.attachments')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 })

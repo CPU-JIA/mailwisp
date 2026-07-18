@@ -52,6 +52,7 @@ export interface MessageSummary {
   parse_status: 'pending' | 'processing' | 'parsed' | 'failed'
   size_bytes: number
   has_attachments: boolean
+  seen: boolean
 }
 
 export interface MessagePage {
