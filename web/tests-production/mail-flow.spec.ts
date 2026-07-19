@@ -93,7 +93,7 @@ test('delivers SMTP through the production Compose stack and completes the brows
 
   await page.getByRole('button', { name: '删除这封邮件' }).click()
   await page.getByRole('button', { name: '再次点击，确认删除邮件' }).click()
-  await expect(page.getByText('风还没有带来新消息')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '等待来信' })).toBeVisible()
   await page.getByRole('button', { name: '永久删除邮箱' }).click()
   await page.getByRole('button', { name: '再次点击，确认永久删除' }).click()
   await expect(page.getByRole('button', { name: '创建临时邮箱' })).toBeVisible()
