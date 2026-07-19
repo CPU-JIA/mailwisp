@@ -206,3 +206,11 @@ Release Bundle携带App、Maintenance、Edge与Postfix预构建镜像；Release 
 匿名Inbox创建默认受`MAILWISP_CREATE_DAILY_LIMIT=100`的UTC日配额保护。身份由规范化客户端IP与独立256-bit HMAC Key生成，数据库不保存Plaintext IP。主推荐Docker Compose部署通过`create_quota_hmac_key` Secret注入该Key；不得与Browser Session Key复用，Host-native变量仅作为辅助Profile使用。
 
 `MAILWISP_CONTENT_MIN_FREE_BYTES=1073741824`要求Content Store所在文件系统至少保留1 GiB，并在其上额外容纳一个最大Raw MIME写入窗口。该值是投递准入边界，不替代宿主机或Docker数据目录监控。
+
+## 许可证
+
+MailWisp以[GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）发布。
+
+Copyright (C) 2026 CPU-JIA
+
+AGPL要求：任何对MailWisp的修改版本——包括仅通过网络对外提供服务而不分发二进制的部署——都必须以同一许可证向其用户开放完整对应源码。按原样自托管使用不产生额外义务。
