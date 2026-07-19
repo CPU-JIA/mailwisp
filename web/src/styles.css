@@ -6,7 +6,7 @@
   --surface-strong: oklch(91.8% 0.016 232);
   --ink: oklch(23% 0.025 235);
   --ink-soft: oklch(38% 0.025 235);
-  --muted: oklch(52% 0.02 235);
+  --muted: oklch(48% 0.02 235);
   --line: oklch(86% 0.015 225);
   --line-strong: oklch(76% 0.025 230);
   --brand: oklch(51% 0.18 252);
@@ -59,7 +59,7 @@
   --surface-strong: oklch(88.5% 0.03 195);
   --ink: oklch(24% 0.035 205);
   --ink-soft: oklch(38% 0.036 205);
-  --muted: oklch(49% 0.035 205);
+  --muted: oklch(46% 0.035 205);
   --line: oklch(79% 0.03 190);
   --line-strong: oklch(68% 0.045 195);
   --brand: oklch(46% 0.13 210);
